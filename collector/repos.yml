@@ -1,0 +1,265 @@
+# oss-radar :: tracked repositories
+#
+# ~45 repos across 6 categories.
+#
+# VERIFY BEFORE TRUSTING: run the collector dry-run first. Any path that has
+# been renamed, transferred, or deleted returns 404 and logs "NOT FOUND".
+# Fix or drop those, then run for real.
+#
+#   python collector/collect.py --config collector/repos.yml --dry-run
+#
+# Note: GitHub transparently redirects renamed repos via the API, so a rename
+# may resolve silently -- the returned `full_name` will differ from what you
+# asked for. That difference is itself a `renamed_or_transferred` event and the
+# collector stores the returned name, so it gets caught downstream.
+
+repos:
+
+  # --------------------------------------------------------------------
+  # coding-agents -- high release velocity, the bulk of your digest volume
+  # --------------------------------------------------------------------
+
+  - repo: cline/cline
+    category: coding-agents
+    priority: high
+    notes: "VS Code autonomous coding agent, very frequent releases"
+
+  - repo: All-Hands-AI/OpenHands
+    category: coding-agents
+    priority: high
+    notes: "Formerly OpenDevin -- already renamed once, good rename test case"
+
+  - repo: google-gemini/gemini-cli
+    category: coding-agents
+    priority: high
+    notes: "Google's terminal agent, Apache 2.0"
+
+  - repo: openai/codex
+    category: coding-agents
+    priority: high
+    notes: "OpenAI terminal coding agent"
+
+  - repo: Aider-AI/aider
+    category: coding-agents
+    priority: normal
+    notes: "Moved from paul-gauthier/aider -- transfer already happened"
+
+  - repo: continuedev/continue
+    category: coding-agents
+    priority: normal
+
+  - repo: block/goose
+    category: coding-agents
+    priority: normal
+    notes: "Block's on-machine agent"
+
+  - repo: sst/opencode
+    category: coding-agents
+    priority: normal
+
+  - repo: SWE-agent/SWE-agent
+    category: coding-agents
+    priority: normal
+    notes: "VERIFY -- moved out of princeton-nlp org"
+
+  - repo: RooCodeInc/Roo-Code
+    category: coding-agents
+    priority: normal
+    notes: "VERIFY -- renamed from Roo-Cline, org changed"
+
+  # --------------------------------------------------------------------
+  # mcp-servers -- protocol churn, breaking changes matter most here
+  # --------------------------------------------------------------------
+
+  - repo: modelcontextprotocol/servers
+    category: mcp-servers
+    priority: high
+    notes: "Reference server implementations"
+
+  - repo: modelcontextprotocol/python-sdk
+    category: mcp-servers
+    priority: high
+    notes: "Breaking changes here ripple across the ecosystem"
+
+  - repo: modelcontextprotocol/typescript-sdk
+    category: mcp-servers
+    priority: high
+
+  - repo: modelcontextprotocol/specification
+    category: mcp-servers
+    priority: high
+    notes: "Spec changes are the highest-materiality events in this category"
+
+  - repo: modelcontextprotocol/inspector
+    category: mcp-servers
+    priority: normal
+
+  - repo: github/github-mcp-server
+    category: mcp-servers
+    priority: normal
+
+  - repo: microsoft/playwright-mcp
+    category: mcp-servers
+    priority: normal
+
+  - repo: upstash/context7
+    category: mcp-servers
+    priority: normal
+
+  - repo: ClickHouse/mcp-clickhouse
+    category: mcp-servers
+    priority: normal
+    notes: "Data-adjacent, relevant to your other projects"
+
+  - repo: motherduckdb/mcp-server-motherduck
+    category: mcp-servers
+    priority: normal
+
+  - repo: sooperset/mcp-atlassian
+    category: mcp-servers
+    priority: normal
+    notes: "Single-maintainer -- good elephant-factor=1 example"
+
+  # --------------------------------------------------------------------
+  # skills-and-plugins
+  # --------------------------------------------------------------------
+
+  - repo: anthropics/skills
+    category: skills-and-plugins
+    priority: high
+    notes: "VERIFY path"
+
+  - repo: anthropics/claude-code
+    category: skills-and-plugins
+    priority: high
+    notes: "VERIFY -- may be issues-only or mirror repo"
+
+  - repo: wong2/awesome-mcp-servers
+    category: skills-and-plugins
+    priority: normal
+    notes: "Awesome-list -- v2 discovery will parse these for new repos"
+
+  - repo: punkpeye/awesome-mcp-servers
+    category: skills-and-plugins
+    priority: normal
+
+  - repo: appcypher/awesome-mcp-servers
+    category: skills-and-plugins
+    priority: normal
+
+  # --------------------------------------------------------------------
+  # eval-harnesses -- slower cadence, more meaningful releases
+  # --------------------------------------------------------------------
+
+  - repo: EleutherAI/lm-evaluation-harness
+    category: eval-harnesses
+    priority: normal
+
+  - repo: promptfoo/promptfoo
+    category: eval-harnesses
+    priority: normal
+
+  - repo: confident-ai/deepeval
+    category: eval-harnesses
+    priority: normal
+
+  - repo: explodinggradients/ragas
+    category: eval-harnesses
+    priority: normal
+
+  - repo: langfuse/langfuse
+    category: eval-harnesses
+    priority: normal
+
+  - repo: Arize-ai/phoenix
+    category: eval-harnesses
+    priority: normal
+
+  - repo: openai/evals
+    category: eval-harnesses
+    priority: normal
+    notes: "Deliberately included -- slow-moving, may trip went_stale. Good."
+
+  # --------------------------------------------------------------------
+  # orchestration -- agent frameworks
+  # --------------------------------------------------------------------
+
+  - repo: langchain-ai/langchain
+    category: orchestration
+    priority: normal
+    notes: "High volume -- stress-tests release parsing"
+
+  - repo: langchain-ai/langgraph
+    category: orchestration
+    priority: normal
+
+  - repo: crewAIInc/crewAI
+    category: orchestration
+    priority: normal
+    notes: "VERIFY -- org renamed from joaomdmoura"
+
+  - repo: microsoft/autogen
+    category: orchestration
+    priority: normal
+
+  - repo: openai/openai-agents-python
+    category: orchestration
+    priority: normal
+
+  - repo: pydantic/pydantic-ai
+    category: orchestration
+    priority: normal
+
+  - repo: BerriAI/litellm
+    category: orchestration
+    priority: normal
+    notes: "Extremely high release cadence -- good volume test"
+
+  - repo: Significant-Gravitas/AutoGPT
+    category: orchestration
+    priority: normal
+    notes: "Deliberately included -- activity has declined, good decay signal"
+
+  # --------------------------------------------------------------------
+  # model-serving
+  # --------------------------------------------------------------------
+
+  - repo: vllm-project/vllm
+    category: model-serving
+    priority: normal
+
+  - repo: ollama/ollama
+    category: model-serving
+    priority: normal
+
+  - repo: ggml-org/llama.cpp
+    category: model-serving
+    priority: normal
+    notes: "Was ggerganov/llama.cpp -- a real transfer. Keep as a rename case."
+
+  - repo: sgl-project/sglang
+    category: model-serving
+    priority: normal
+
+  - repo: huggingface/text-generation-inference
+    category: model-serving
+    priority: normal
+
+  - repo: lm-sys/FastChat
+    category: model-serving
+    priority: normal
+    notes: "Deliberately included -- largely superseded, expect staleness"
+
+  # --------------------------------------------------------------------
+  # control repos -- predictable behaviour, useful as a baseline
+  # --------------------------------------------------------------------
+
+  - repo: dbt-labs/dbt-core
+    category: unclassified
+    priority: normal
+    notes: "Control: strict semver, regular cadence. If detection breaks here, it's your bug."
+
+  - repo: apache/airflow
+    category: unclassified
+    priority: normal
+    notes: "Control: high volume, ASF governance, many contributors"

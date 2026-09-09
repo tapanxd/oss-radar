@@ -1,0 +1,55 @@
+# Place at: .github/workflows/collect.yml
+#
+# Secrets to add under Settings -> Secrets and variables -> Actions:
+#   GH_TOKEN      GitHub PAT, read-only public repos
+#   DATABASE_URL  Neon connection string, must include ?sslmode=require
+#
+# NOTE: secret names cannot start with GITHUB_ — that prefix is reserved.
+# This is why the token secret is GH_TOKEN and not GITHUB_TOKEN.
+
+name: collect
+
+on:
+  schedule:
+    # 06:15 UTC daily. Avoid :00 — the top of the hour is the busiest slot on
+    # shared runners and scheduled jobs get queued or dropped more often there.
+    - cron: "15 6 * * *"
+  workflow_dispatch:        # lets you trigger a run manually from the UI
+
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r collector/requirements.txt
+
+      - name: Collect
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python collector/collect.py --config collector/repos.yml
+
+# --- Two things that will bite you if you forget them -----------------------
+#
+# 1. GitHub disables scheduled workflows on repos with no activity for ~60
+#    days. You will be committing regularly while building, so this is
+#    unlikely to trigger — but if you pause the project, the cron dies
+#    SILENTLY and your snapshot history gets a permanent hole. Check the
+#    Actions tab if you come back after a break.
+#
+# 2. Neon's free tier scales compute to zero after inactivity. The first
+#    connection after a quiet period has a cold start of a few seconds, which
+#    is why connect_timeout is set to 30 in collect.py. Do not lower it.
