@@ -1,0 +1,130 @@
+version: 2
+
+models:
+  - name: int_repo_state_history
+    description: >
+      Grain: one row per repo per distinct state period.
+      The SCD2 spine. Collapses consecutive identical daily observations into
+      valid_from / valid_to validity ranges over the slowly-changing metadata
+      attributes. Everything downstream depends on this model.
+
+      Built from the observation log with window functions rather than with
+      dbt snapshot, so it is a pure function of the source and can be dropped
+      and rebuilt identically at any time. See DESIGN.md section 5.
+
+      Volatile counts (stars, forks, issues) and release fields are
+      deliberately NOT part of the tracked state - they would start a new
+      period almost every day. They are handled by int_activity_signals and
+      int_release_events respectively.
+    columns:
+      - name: repo_state_key
+        description: Surrogate key, one per repo per state period.
+        data_tests: [not_null, unique]
+      - name: github_repo_id
+        description: >
+          GitHub numeric repo id. Stable across renames and transfers, which is
+          why state history is partitioned on it rather than on the name.
+        data_tests: [not_null]
+      - name: state_sequence
+        description: 1-based counter of state periods within a repo, ordered by time.
+        data_tests: [not_null]
+      - name: valid_from
+        description: First date this state was observed.
+        data_tests: [not_null]
+      - name: valid_to
+        description: >
+          Day before the next state began; NULL while the state is current.
+          Derived from the next period valid_from rather than from
+          last_observed_date, so a collection gap does not create a phantom
+          period with no state.
+      - name: is_current_state
+        description: True for the most recent state period of each repo.
+        data_tests: [not_null]
+      - name: is_initial_state
+        description: >
+          True for the first observed state of a repo. Distinguishes "changed
+          during the observation window" from "was already this way when
+          tracking began" - the digest must not report the latter as news.
+        data_tests: [not_null]
+      - name: repo_full_name
+        description: The path requested in repos.yml. Stable config key.
+        data_tests: [not_null]
+      - name: api_full_name
+        description: >
+          The path GitHub actually returned. Differs from repo_full_name when
+          the repo has been renamed or transferred, since GitHub redirects
+          silently. That difference is the rename signal.
+      - name: license_spdx
+        description: SPDX identifier, or NULL where GitHub detects no license.
+      - name: is_archived
+        description: Archived flag. False to true is a critical change event.
+        data_tests: [not_null]
+      - name: days_observed_in_state
+        description: Count of daily observations falling in this state period.
+        data_tests: [not_null]
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [github_repo_id, state_sequence]
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "valid_to is null or valid_to >= valid_from"
+
+unit_tests:
+  # Real change data does not exist yet - the collector has only been running
+  # since 2026-09-09. These fixtures prove the collapse-and-split logic works
+  # now, rather than discovering it is wrong in a month when the first real
+  # license change lands.
+  - name: collapses_identical_days_and_splits_on_change
+    model: int_repo_state_history
+    description: >
+      Four daily observations of one repo. Days 1-2 are identical and must
+      collapse into a single period; day 3 changes the license; day 4 archives
+      it. Expect three periods with contiguous validity ranges and only the
+      last one current.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 1, observed_date: "2026-01-01", repo_full_name: "o/r", api_full_name: "o/r", license_spdx: "MIT", is_archived: false, category: "mcp-servers", priority: "high"}
+          - {github_repo_id: 1, observed_date: "2026-01-02", repo_full_name: "o/r", api_full_name: "o/r", license_spdx: "MIT", is_archived: false, category: "mcp-servers", priority: "high"}
+          - {github_repo_id: 1, observed_date: "2026-01-03", repo_full_name: "o/r", api_full_name: "o/r", license_spdx: "Apache-2.0", is_archived: false, category: "mcp-servers", priority: "high"}
+          - {github_repo_id: 1, observed_date: "2026-01-04", repo_full_name: "o/r", api_full_name: "o/r", license_spdx: "Apache-2.0", is_archived: true, category: "mcp-servers", priority: "high"}
+    expect:
+      rows:
+        - {github_repo_id: 1, state_sequence: 1, valid_from: "2026-01-01", valid_to: "2026-01-02", is_current_state: false, is_initial_state: true, days_observed_in_state: 2, license_spdx: "MIT", is_archived: false}
+        - {github_repo_id: 1, state_sequence: 2, valid_from: "2026-01-03", valid_to: "2026-01-03", is_current_state: false, is_initial_state: false, days_observed_in_state: 1, license_spdx: "Apache-2.0", is_archived: false}
+        - {github_repo_id: 1, state_sequence: 3, valid_from: "2026-01-04", valid_to: null, is_current_state: true, is_initial_state: false, days_observed_in_state: 1, license_spdx: "Apache-2.0", is_archived: true}
+
+  - name: detects_change_out_of_null
+    model: int_repo_state_history
+    description: >
+      A repo with no detected license that later gains one. This is the case a
+      naive md5(a || b) fingerprint gets wrong: NULL concatenated with anything
+      is NULL in Postgres, so every null-containing state hashes identically
+      and the change is silently lost. Expect two distinct periods.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 2, observed_date: "2026-01-01", repo_full_name: "o/r2", api_full_name: "o/r2", license_spdx: null, is_archived: false}
+          - {github_repo_id: 2, observed_date: "2026-01-02", repo_full_name: "o/r2", api_full_name: "o/r2", license_spdx: "MIT", is_archived: false}
+    expect:
+      rows:
+        - {github_repo_id: 2, state_sequence: 1, valid_from: "2026-01-01", valid_to: "2026-01-01", license_spdx: null}
+        - {github_repo_id: 2, state_sequence: 2, valid_from: "2026-01-02", valid_to: null, license_spdx: "MIT"}
+
+  - name: rename_is_a_state_change_not_a_new_repo
+    model: int_repo_state_history
+    description: >
+      GitHub redirects renamed repos silently, so api_full_name changes while
+      the numeric id stays the same. Because history is partitioned on the id,
+      this must produce two periods for ONE repo - not two separate repos, as
+      partitioning by name would give.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 3, observed_date: "2026-01-01", repo_full_name: "old/r", api_full_name: "old/r", is_archived: false}
+          - {github_repo_id: 3, observed_date: "2026-01-02", repo_full_name: "old/r", api_full_name: "new/r", is_archived: false}
+    expect:
+      rows:
+        - {github_repo_id: 3, state_sequence: 1, valid_from: "2026-01-01", valid_to: "2026-01-01", api_full_name: "old/r"}
+        - {github_repo_id: 3, state_sequence: 2, valid_from: "2026-01-02", valid_to: null, api_full_name: "new/r"}

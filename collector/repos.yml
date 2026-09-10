@@ -10,8 +10,14 @@
 #
 # Note: GitHub transparently redirects renamed repos via the API, so a rename
 # may resolve silently -- the returned `full_name` will differ from what you
-# asked for. That difference is itself a `renamed_or_transferred` event and the
-# collector stores the returned name, so it gets caught downstream.
+# asked for. That difference is itself a `renamed_or_transferred` event.
+#
+# The collector stores the REQUESTED path in `repo_full_name` (collect.py:222),
+# not the returned one. The returned name is still available inside
+# `raw_repo_payload->>'full_name'`, and stg_repo_observations exposes it as
+# `api_full_name`. Comparing the two is how renames are detected. Keeping the
+# requested path as the stored key is what makes this file a stable join key
+# even after a repo moves.
 
 repos:
 
