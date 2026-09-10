@@ -1,0 +1,8 @@
+marker_id,pattern,marker_kind,description
+breaking_change_block,"BREAKING[ _-]?CHANGES?",conventional_commit,Conventional Commits BREAKING CHANGE footer or heading
+conventional_bang,"^[a-z]+(\([^)]*\))?!:",conventional_commit,Conventional Commit type with a bang before the colon
+heading_breaking,"(^|\n)#{1,6}[^\n]*break(ing)?[^\n]*",heading,Markdown heading mentioning breaking
+heading_migration,"(^|\n)#{1,6}[^\n]*migrat(e|ion)[^\n]*",heading,Markdown heading about migration
+heading_upgrade_guide,"(^|\n)#{1,6}[^\n]*upgrade guide[^\n]*",heading,Markdown heading pointing at an upgrade guide
+removed_support,"(dropped|removed) support for",prose,Prose stating support was dropped or removed
+no_longer_supported,"no longer (supported|works|available)",prose,Prose stating something no longer works

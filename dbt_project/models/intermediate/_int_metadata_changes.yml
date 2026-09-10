@@ -1,0 +1,138 @@
+version: 2
+
+models:
+  - name: int_metadata_changes
+    description: >
+      Grain: one row per repo per state transition per changed attribute.
+      Unpivots int_repo_state_history into discrete change events with
+      before/after values and assembled evidence. Feeds int_change_events.
+
+      A repo's first state period produces no rows: there is nothing prior to
+      compare against, and reporting pre-existing state as change would make
+      the first digest a wall of false events.
+    columns:
+      - name: change_key
+        description: Surrogate key over repo, state transition and change type.
+        data_tests: [not_null, unique]
+      - name: github_repo_id
+        description: Stable GitHub numeric id of the repo that changed.
+        data_tests: [not_null]
+      - name: repo_full_name
+        description: Repo path as configured in repos.yml.
+        data_tests: [not_null]
+      - name: detected_at
+        description: >
+          Date the new state was first observed. This is when the change was
+          DETECTED, not necessarily when it happened - the true event can be up
+          to one collection interval earlier. The digest must not imply
+          otherwise.
+        data_tests: [not_null]
+      - name: change_type
+        description: What kind of change this row represents.
+        data_tests:
+          - not_null
+          - accepted_values:
+              # Must stay in sync with the tracked_attributes list at the top of
+              # the model. An unrecognised type fails the build rather than
+              # reaching the digest.
+              arguments:
+                values:
+                  - renamed_or_transferred
+                  - license_changed
+                  - default_branch_changed
+                  - description_changed
+                  - homepage_changed
+                  - topics_changed
+                  - tracking_category_changed
+                  - tracking_priority_changed
+                  - archived
+                  - unarchived
+      - name: base_materiality
+        description: >
+          Materiality before repo priority and staleness adjustments are
+          applied downstream. Judgement, not a validated model.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [critical, high, medium, low]
+      - name: changed_attribute
+        description: Name of the underlying column that differed.
+        data_tests: [not_null]
+      - name: before_value
+        description: Value in the previous state period. NULL is meaningful - it means the attribute was absent.
+      - name: after_value
+        description: Value in the new state period. NULL means the attribute was removed.
+      - name: evidence
+        description: >
+          JSON carrying the attribute, before, after and detection date. Every
+          change event must be verifiable by the reader without opening GitHub.
+          DESIGN.md section 6 makes this non-negotiable, so it is tested.
+        data_tests: [not_null]
+    data_tests:
+      # A change row where nothing actually differs is a logic bug, and one that
+      # would quietly inflate every digest.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "before_value is distinct from after_value"
+
+unit_tests:
+  - name: emits_one_row_per_changed_attribute
+    model: int_metadata_changes
+    description: >
+      A repo that changes licence and default branch in the same transition
+      must produce two separate rows, not one combined "something changed"
+      row, and must not produce rows for the attributes that stayed the same.
+    given:
+      - input: ref('int_repo_state_history')
+        rows:
+          - {github_repo_id: 1, state_sequence: 1, valid_from: "2026-01-01", is_initial_state: true, is_archived: false, api_full_name: "o/r", license_spdx: "MIT", default_branch: "master", description: "d", homepage: null, topics: "a,b", category: "mcp-servers", priority: "high", repo_full_name: "o/r"}
+          - {github_repo_id: 1, state_sequence: 2, valid_from: "2026-01-05", is_initial_state: false, is_archived: false, api_full_name: "o/r", license_spdx: "Apache-2.0", default_branch: "main", description: "d", homepage: null, topics: "a,b", category: "mcp-servers", priority: "high", repo_full_name: "o/r"}
+    expect:
+      rows:
+        - {github_repo_id: 1, change_type: "license_changed", before_value: "MIT", after_value: "Apache-2.0", base_materiality: "critical", detected_at: "2026-01-05"}
+        - {github_repo_id: 1, change_type: "default_branch_changed", before_value: "master", after_value: "main", base_materiality: "medium", detected_at: "2026-01-05"}
+
+  - name: initial_state_produces_no_change_events
+    model: int_metadata_changes
+    description: >
+      A repo observed only once has no prior state. It must produce zero rows,
+      even though every attribute is technically "new". This is what stops the
+      first digest reporting all 49 repos as having just changed.
+    given:
+      - input: ref('int_repo_state_history')
+        rows:
+          - {github_repo_id: 2, state_sequence: 1, valid_from: "2026-01-01", is_initial_state: true, is_archived: true, api_full_name: "o/r2", license_spdx: "MIT", default_branch: "main", description: "d", homepage: null, topics: null, category: "orchestration", priority: "normal", repo_full_name: "o/r2"}
+    expect:
+      rows: []
+
+  - name: archive_direction_is_distinguished
+    model: int_metadata_changes
+    description: >
+      Archiving is critical; un-archiving is a different and much rarer event.
+      They must not collapse into one change type with the values swapped.
+    given:
+      - input: ref('int_repo_state_history')
+        rows:
+          - {github_repo_id: 3, state_sequence: 1, valid_from: "2026-01-01", is_initial_state: true, is_archived: false, api_full_name: "o/r3", license_spdx: "MIT", default_branch: "main", description: "d", homepage: null, topics: null, category: "eval-harnesses", priority: "normal", repo_full_name: "o/r3"}
+          - {github_repo_id: 3, state_sequence: 2, valid_from: "2026-01-02", is_initial_state: false, is_archived: true, api_full_name: "o/r3", license_spdx: "MIT", default_branch: "main", description: "d", homepage: null, topics: null, category: "eval-harnesses", priority: "normal", repo_full_name: "o/r3"}
+          - {github_repo_id: 3, state_sequence: 3, valid_from: "2026-01-03", is_initial_state: false, is_archived: false, api_full_name: "o/r3", license_spdx: "MIT", default_branch: "main", description: "d", homepage: null, topics: null, category: "eval-harnesses", priority: "normal", repo_full_name: "o/r3"}
+    expect:
+      rows:
+        - {github_repo_id: 3, change_type: "archived", before_value: "false", after_value: "true", base_materiality: "critical", detected_at: "2026-01-02"}
+        - {github_repo_id: 3, change_type: "unarchived", before_value: "true", after_value: "false", base_materiality: "medium", detected_at: "2026-01-03"}
+
+  - name: rename_is_critical_and_carries_both_names
+    model: int_metadata_changes
+    description: >
+      A transfer must be reported at critical materiality with both the old and
+      the new path present, since that pair is the entire evidence a reader
+      needs.
+    given:
+      - input: ref('int_repo_state_history')
+        rows:
+          - {github_repo_id: 4, state_sequence: 1, valid_from: "2026-01-01", is_initial_state: true, is_archived: false, api_full_name: "old/name", license_spdx: null, default_branch: "main", description: null, homepage: null, topics: null, category: "coding-agents", priority: "high", repo_full_name: "old/name"}
+          - {github_repo_id: 4, state_sequence: 2, valid_from: "2026-01-09", is_initial_state: false, is_archived: false, api_full_name: "new/name", license_spdx: null, default_branch: "main", description: null, homepage: null, topics: null, category: "coding-agents", priority: "high", repo_full_name: "old/name"}
+    expect:
+      rows:
+        - {github_repo_id: 4, change_type: "renamed_or_transferred", before_value: "old/name", after_value: "new/name", base_materiality: "critical", detected_at: "2026-01-09"}

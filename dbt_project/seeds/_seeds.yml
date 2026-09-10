@@ -1,0 +1,31 @@
+version: 2
+
+seeds:
+  - name: breaking_change_markers
+    description: >
+      Patterns that mark a release note as describing a breaking change.
+
+      These live in a seed rather than in SQL so they are visible, reviewable
+      and testable without reading a model, and so adding one is a data change
+      rather than a code change. DESIGN.md section 6 requires this.
+
+      They are case-insensitive POSIX regexes, applied to the release body. A
+      match records WHICH marker fired and the matched text, so the digest can
+      quote the evidence instead of asserting "this looks breaking".
+    columns:
+      - name: marker_id
+        description: Stable identifier, used in evidence so a reader can see which rule fired.
+        data_tests: [not_null, unique]
+      - name: pattern
+        description: Case-insensitive POSIX regex applied to the release body.
+        data_tests: [not_null]
+      - name: marker_kind
+        description: Family of signal, so a heading match and a prose match can be weighted differently later.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [conventional_commit, heading, prose]
+      - name: description
+        description: What this pattern is looking for, in words.
+        data_tests: [not_null]

@@ -1,0 +1,162 @@
+version: 2
+
+models:
+  - name: int_release_events
+    description: >
+      Grain: one row per repo per newly observed release tag.
+      Detects a new release by comparing latest_release_tag against the
+      previous day, parses the tag for a semver core, classifies the bump, and
+      scans the release body for breaking-change markers.
+
+      Built from the observation log rather than the SCD2 spine, because
+      release fields are deliberately excluded from tracked state - including
+      them would start a new state period on every release.
+
+      Breaking markers outrank the numeric bump: a project shipping a breaking
+      change inside a minor release is exactly what a digest exists to catch.
+    columns:
+      - name: change_key
+        description: Surrogate key over repo and release tag.
+        data_tests: [not_null, unique]
+      - name: github_repo_id
+        description: Stable GitHub numeric id.
+        data_tests: [not_null]
+      - name: detected_at
+        description: >
+          Date the new tag was first observed. Detection date, not release
+          date - release_published_at holds the latter, and they can differ by
+          up to one collection interval.
+        data_tests: [not_null]
+      - name: change_type
+        description: Classified release kind.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - major_release
+                  - minor_release
+                  - patch_release
+                  - breaking_release
+                  - release_unclassified
+      - name: base_materiality
+        description: Materiality before priority and staleness adjustment.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [critical, high, medium, low]
+      - name: before_value
+        description: The previously observed tag.
+      - name: after_value
+        description: The newly observed tag.
+        data_tests: [not_null]
+      - name: is_calver_tag
+        description: >
+          True when the tag is a date version such as 2026.8.31. Parsed as
+          semver it would read as major 2026 and make every date-versioned
+          release look like a major bump, so semver parts are nulled and the
+          release falls through to release_unclassified.
+        data_tests: [not_null]
+      - name: prerelease_label
+        description: >
+          Semver prerelease suffix such as rc.1, or NULL. Only a hyphen suffix
+          on the version itself counts - `v2.0.0-vscode` is a platform build
+          and `desktop-v0.0.25` has a hyphen in its prefix, and neither is a
+          prerelease.
+      - name: has_breaking_markers
+        description: Whether any seeded breaking-change pattern matched the release body.
+        data_tests: [not_null]
+      - name: matched_marker_ids
+        description: Comma-separated ids of the markers that fired, so a reader can see which rule made the call.
+      - name: evidence
+        description: >
+          JSON carrying both tags, publish date, which markers fired and the
+          matched line of the release note. Non-negotiable per DESIGN.md
+          section 6.
+        data_tests: [not_null]
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "before_value is distinct from after_value"
+      # Anything flagged breaking must name the rule that flagged it, or the
+      # digest is asserting a breaking change it cannot justify.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "not has_breaking_markers or matched_marker_ids is not null"
+
+unit_tests:
+  - name: classifies_bump_types
+    model: int_release_events
+    description: >
+      Major, minor and patch bumps on conventional tags. Bodies are empty so
+      no breaking marker can fire and the numeric classification is what is
+      under test.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 1, observed_date: "2026-01-01", repo_full_name: "o/r", category: "c", priority: "normal", latest_release_tag: "v1.2.3", latest_release_body: ""}
+          - {github_repo_id: 1, observed_date: "2026-01-02", repo_full_name: "o/r", category: "c", priority: "normal", latest_release_tag: "v1.2.4", latest_release_body: ""}
+          - {github_repo_id: 1, observed_date: "2026-01-03", repo_full_name: "o/r", category: "c", priority: "normal", latest_release_tag: "v1.3.0", latest_release_body: ""}
+          - {github_repo_id: 1, observed_date: "2026-01-04", repo_full_name: "o/r", category: "c", priority: "normal", latest_release_tag: "v2.0.0", latest_release_body: ""}
+      - input: ref('breaking_change_markers')
+        rows: []
+    expect:
+      rows:
+        - {github_repo_id: 1, after_value: "v1.2.4", change_type: "patch_release", base_materiality: "low"}
+        - {github_repo_id: 1, after_value: "v1.3.0", change_type: "minor_release", base_materiality: "medium"}
+        - {github_repo_id: 1, after_value: "v2.0.0", change_type: "major_release", base_materiality: "high"}
+
+  - name: first_observation_is_not_a_release
+    model: int_release_events
+    description: >
+      The tag already current when tracking began must produce no event.
+      Without this the first digest would claim every tracked repo had just
+      released.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 2, observed_date: "2026-01-01", repo_full_name: "o/r2", category: "c", priority: "normal", latest_release_tag: "v9.9.9", latest_release_body: ""}
+      - input: ref('breaking_change_markers')
+        rows: []
+    expect:
+      rows: []
+
+  - name: real_world_tags_parse_or_degrade_safely
+    model: int_release_events
+    description: >
+      Tag shapes taken from an actual dry run against the tracked repos, not
+      invented. Prefixed tags must parse; a CalVer tag must NOT be read as a
+      major bump to year 2026, and instead degrades to release_unclassified
+      rather than being dropped.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 3, observed_date: "2026-01-01", repo_full_name: "o/r3", category: "c", priority: "normal", latest_release_tag: "desktop-v0.0.24", latest_release_body: ""}
+          - {github_repo_id: 3, observed_date: "2026-01-02", repo_full_name: "o/r3", category: "c", priority: "normal", latest_release_tag: "desktop-v0.0.25", latest_release_body: ""}
+          - {github_repo_id: 4, observed_date: "2026-01-01", repo_full_name: "o/r4", category: "c", priority: "normal", latest_release_tag: "2026.8.30", latest_release_body: ""}
+          - {github_repo_id: 4, observed_date: "2026-01-02", repo_full_name: "o/r4", category: "c", priority: "normal", latest_release_tag: "2026.8.31", latest_release_body: ""}
+      - input: ref('breaking_change_markers')
+        rows: []
+    expect:
+      rows:
+        - {github_repo_id: 3, after_value: "desktop-v0.0.25", change_type: "patch_release", major: 0, minor: 0, patch: 25, is_calver_tag: false}
+        - {github_repo_id: 4, after_value: "2026.8.31", change_type: "release_unclassified", major: null, minor: null, patch: null, is_calver_tag: true}
+
+  - name: breaking_marker_outranks_patch_bump
+    model: int_release_events
+    description: >
+      A patch-numbered release whose notes announce a breaking change must be
+      reported as breaking at high materiality, not buried as a low-materiality
+      patch. This is the headline case for the whole project.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 5, observed_date: "2026-01-01", repo_full_name: "o/r5", category: "c", priority: "normal", latest_release_tag: "v1.0.0", latest_release_body: "routine fixes"}
+          - {github_repo_id: 5, observed_date: "2026-01-02", repo_full_name: "o/r5", category: "c", priority: "normal", latest_release_tag: "v1.0.1", latest_release_body: "fixes\nThe old entry point is no longer available.\n"}
+      - input: ref('breaking_change_markers')
+        rows:
+          - {marker_id: "no_longer_supported", pattern: "no longer (supported|works|available)", marker_kind: "prose", description: "d"}
+    expect:
+      rows:
+        - {github_repo_id: 5, after_value: "v1.0.1", change_type: "breaking_release", base_materiality: "high", has_breaking_markers: true, matched_marker_ids: "no_longer_supported"}
