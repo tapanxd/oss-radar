@@ -28,7 +28,7 @@ with monthly_activity as (
         is_stale                                         as is_stale_at_month_end
     from {{ ref('int_activity_signals') }}
     order by
-        github_repo_id,
+        github_repo_id asc,
         cast(date_trunc('month', observed_date) as date),
         observed_date desc
 
@@ -50,12 +50,12 @@ monthly_events as (
 
     select
         github_repo_id,
-        detected_month                                   as timeline_month,
-        count(*)                                         as change_events,
+        detected_month                                              as timeline_month,
+        count(*)                                                    as change_events,
         count(*) filter (where change_type in (
             'major_release', 'minor_release', 'patch_release',
             'breaking_release', 'release_unclassified'
-        ))                                               as releases,
+        ))                                                          as releases,
         count(*) filter (where materiality in ('critical', 'high')) as material_events,
         string_agg(distinct change_type, ',' order by change_type)  as change_types
     from {{ ref('fct_change_events') }}
@@ -67,8 +67,8 @@ monthly_gaps as (
 
     select
         github_repo_id,
-        cast(date_trunc('month', missing_date) as date)  as timeline_month,
-        count(*)                                         as missing_observation_days
+        cast(date_trunc('month', missing_date) as date) as timeline_month,
+        count(*)                                        as missing_observation_days
     from {{ ref('int_collection_gaps') }}
     group by 1, 2
 
@@ -82,26 +82,26 @@ select
     a.priority,
 
     a.last_observed_in_month,
-    coalesce(d.days_observed, 0)              as days_observed,
-    coalesce(g.missing_observation_days, 0)   as missing_observation_days,
+    coalesce(d.days_observed, 0)            as days_observed,
+    coalesce(g.missing_observation_days, 0) as missing_observation_days,
 
     a.stars_at_month_end,
-    coalesce(d.stars_gained_in_month, 0)      as stars_gained_in_month,
+    coalesce(d.stars_gained_in_month, 0)    as stars_gained_in_month,
     a.forks_at_month_end,
     a.open_issues_at_month_end,
 
     a.days_since_push_at_month_end,
     a.is_stale_at_month_end,
 
-    coalesce(e.change_events, 0)              as change_events,
-    coalesce(e.releases, 0)                   as releases,
-    coalesce(e.material_events, 0)            as material_events,
+    coalesce(e.change_events, 0)            as change_events,
+    coalesce(e.releases, 0)                 as releases,
+    coalesce(e.material_events, 0)          as material_events,
     e.change_types
 
-from monthly_activity a
-left join monthly_deltas d
+from monthly_activity as a
+left join monthly_deltas as d
   on a.github_repo_id = d.github_repo_id and a.timeline_month = d.timeline_month
-left join monthly_events e
+left join monthly_events as e
   on a.github_repo_id = e.github_repo_id and a.timeline_month = e.timeline_month
-left join monthly_gaps g
+left join monthly_gaps as g
   on a.github_repo_id = g.github_repo_id and a.timeline_month = g.timeline_month

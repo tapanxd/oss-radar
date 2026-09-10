@@ -85,7 +85,7 @@ breaking_matches as (
         p.github_repo_id,
         p.observed_date,
         p.latest_release_tag,
-        count(*)                                    as markers_matched,
+        count(*)                                                   as markers_matched,
         string_agg(distinct m.marker_id, ',' order by m.marker_id) as matched_marker_ids,
         -- The matched LINE, not the matched capture group. This is the
         -- evidence a reader needs to judge the call without opening the
@@ -108,9 +108,9 @@ breaking_matches as (
                 )
             ),
             300
-        )                                           as matched_text
-    from parsed p
-    join {{ ref('breaking_change_markers') }} m
+        )                                                          as matched_text
+    from parsed as p
+    inner join {{ ref('breaking_change_markers') }} as m
       on p.latest_release_body is not null
      and p.latest_release_body ~* m.pattern
     group by p.github_repo_id, p.observed_date, p.latest_release_tag
@@ -122,34 +122,34 @@ classified as (
     select
         p.*,
 
-        coalesce(b.markers_matched, 0)              as breaking_markers_matched,
+        coalesce(b.markers_matched, 0) as breaking_markers_matched,
         b.matched_marker_ids,
-        b.matched_text                              as breaking_evidence_text,
-        b.markers_matched is not null               as has_breaking_markers,
+        b.matched_text                 as breaking_evidence_text,
+        b.markers_matched is not null  as has_breaking_markers,
 
         case
             -- Order matters. Breaking markers outrank the numeric bump: a
             -- project that ships a breaking change in a minor release is
             -- exactly the case a digest exists to catch.
-            when b.markers_matched is not null                      then 'breaking_release'
-            when p.major is null                                    then 'release_unclassified'
-            when p.previous_major is null                           then 'release_unclassified'
-            when p.major > p.previous_major                         then 'major_release'
+            when b.markers_matched is not null then 'breaking_release'
+            when p.major is null then 'release_unclassified'
+            when p.previous_major is null then 'release_unclassified'
+            when p.major > p.previous_major then 'major_release'
             when p.major = p.previous_major
-             and p.minor > p.previous_minor                         then 'minor_release'
+             and p.minor > p.previous_minor then 'minor_release'
             when p.major = p.previous_major
              and p.minor = p.previous_minor
-             and p.patch > p.previous_patch                         then 'patch_release'
+             and p.patch > p.previous_patch then 'patch_release'
             -- A version that went backwards is not a bump. It usually means
             -- the repo publishes releases for several components under one
             -- tag namespace, so the "latest" flips between them.
             else 'release_unclassified'
-        end                                         as change_type
+        end                            as change_type
 
-    from parsed p
-    left join breaking_matches b
-      on  p.github_repo_id    = b.github_repo_id
-      and p.observed_date     = b.observed_date
+    from parsed as p
+    left join breaking_matches as b
+      on p.github_repo_id = b.github_repo_id
+      and p.observed_date = b.observed_date
       and p.latest_release_tag = b.latest_release_tag
 
 ),
@@ -159,29 +159,29 @@ final as (
     select
         {{ dbt_utils.generate_surrogate_key([
             'github_repo_id', 'latest_release_tag'
-        ]) }}                                       as change_key,
+        ]) }}                                         as change_key,
 
         github_repo_id,
         repo_full_name,
         category,
         priority,
-        observed_date                               as detected_at,
+        observed_date                                 as detected_at,
 
         change_type,
 
         case change_type
-            when 'breaking_release'     then 'high'
-            when 'major_release'        then 'high'
-            when 'minor_release'        then 'medium'
+            when 'breaking_release' then 'high'
+            when 'major_release' then 'high'
+            when 'minor_release' then 'medium'
             when 'release_unclassified' then 'medium'
-            when 'patch_release'        then 'low'
-        end                                         as base_materiality,
+            when 'patch_release' then 'low'
+        end                                           as base_materiality,
 
-        previous_tag                                as before_value,
-        latest_release_tag                          as after_value,
+        previous_tag                                  as before_value,
+        latest_release_tag                            as after_value,
 
-        latest_release_name                         as release_name,
-        latest_release_published_at                 as release_published_at,
+        latest_release_name                           as release_name,
+        latest_release_published_at                   as release_published_at,
         coalesce(latest_release_is_prerelease, false) as is_github_prerelease,
         prerelease_label,
         is_calver_tag,
@@ -194,13 +194,13 @@ final as (
         matched_marker_ids,
 
         json_build_object(
-            'previous_tag',     previous_tag,
-            'new_tag',          latest_release_tag,
-            'published_at',     latest_release_published_at,
+            'previous_tag', previous_tag,
+            'new_tag', latest_release_tag,
+            'published_at', latest_release_published_at,
             'breaking_markers', matched_marker_ids,
-            'matched_text',     breaking_evidence_text,
-            'detected_at',      observed_date
-        )::text                                     as evidence
+            'matched_text', breaking_evidence_text,
+            'detected_at', observed_date
+        )::text                                       as evidence
 
     from classified
 

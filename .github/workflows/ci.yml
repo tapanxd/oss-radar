@@ -1,0 +1,289 @@
+# Slim CI.
+#
+# On a pull request, build ONLY the models that changed and their descendants,
+# deferring everything unchanged to production. On a push to main, build
+# production in full and publish its manifest so the next PR has something to
+# defer against.
+#
+# WHY THIS SHAPE
+#
+# `--defer --state` needs the deferred relations to actually exist. If a model
+# is unchanged, dbt does not rebuild it; it rewrites `ref()` to point at the
+# production relation instead. That only works if the CI connection can see
+# production, so CI runs against the SAME Neon database as prod, in a
+# throwaway per-PR schema, rather than against a fresh empty container. A
+# fresh container has no `analytics` schema to defer to, deferral silently
+# degrades to building everything, and the whole point is lost.
+#
+# Nothing here writes to `raw`. dbt only reads it, and the CI schema is dropped
+# on the way out - including when the build fails, which is exactly when it
+# would otherwise be left behind.
+
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  # Per-PR, so a force-push cancels the superseded run instead of leaving two
+  # builds racing for the same CI schema.
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  DBT_PROFILES_DIR: dbt_project
+
+# Connection details are parsed out of the DATABASE_URL secret the collector
+# workflow already uses, rather than asking for five more secrets that can
+# drift out of sync with it. dbt-postgres cannot take a URL, only components.
+
+jobs:
+
+  # ------------------------------------------------------------------
+  # Fast checks. No database, so they fail in seconds rather than after
+  # waiting on Neon to wake from idle.
+  # ------------------------------------------------------------------
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: |
+          pip install -r collector/requirements.txt
+          pip install dbt-postgres pytest sqlfluff
+
+      - name: Collector tests
+        # The database-backed idempotency tests skip themselves when no local
+        # Postgres is reachable, which is the case here. The rate-limit and
+        # config tests are pure and run everywhere.
+        run: pytest -q
+
+      - name: dbt deps
+        working-directory: dbt_project
+        run: dbt deps
+
+      - name: Parse Neon connection details
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import os
+          from urllib.parse import urlparse, unquote
+          u = urlparse(os.environ["DATABASE_URL"])
+          print(f"NEON_HOST={u.hostname}")
+          print(f"NEON_PORT={u.port or 5432}")
+          print(f"NEON_USER={unquote(u.username or '')}")
+          print(f"NEON_PASSWORD={unquote(u.password or '')}")
+          print(f"NEON_DB={u.path.lstrip('/')}")
+          PY
+
+      - name: dbt parse
+        working-directory: dbt_project
+        # Compiles every model and macro without touching the warehouse.
+        # Catches a broken ref, a bad Jinja block or a missing macro before
+        # anything waits on a connection.
+        run: dbt parse --target ci
+        env:
+          DBT_CI_SCHEMA: parse_only
+
+      - name: sqlfluff lint
+        working-directory: dbt_project
+        run: sqlfluff lint models --processes 2
+
+  # ------------------------------------------------------------------
+  # Slim CI. Pull requests only.
+  # ------------------------------------------------------------------
+  slim-build:
+    if: github.event_name == 'pull_request'
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DBT_CI_SCHEMA: ci_pr_${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        # psycopg v3 is for the cleanup step at the end. dbt-postgres brings
+        # psycopg2, which this repo does not import anywhere itself.
+        run: pip install dbt-postgres "psycopg[binary]"
+
+      - name: dbt deps
+        working-directory: dbt_project
+        run: dbt deps
+
+      - name: Parse Neon connection details
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import os
+          from urllib.parse import urlparse, unquote
+          u = urlparse(os.environ["DATABASE_URL"])
+          print(f"NEON_HOST={u.hostname}")
+          print(f"NEON_PORT={u.port or 5432}")
+          print(f"NEON_USER={unquote(u.username or '')}")
+          print(f"NEON_PASSWORD={unquote(u.password or '')}")
+          print(f"NEON_DB={u.path.lstrip('/')}")
+          PY
+
+      - name: Fetch production manifest
+        id: manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p prod-manifest
+          # The manifest comes from the most recent successful main build. There
+          # is no way to reference another workflow run's artifact declaratively,
+          # so the API is used directly.
+          RUN_ID=$(gh run list \
+            --workflow ci.yml \
+            --branch main \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')
+
+          if [ -z "$RUN_ID" ]; then
+            echo "No successful main build yet - nothing to defer against."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if gh run download "$RUN_ID" --name prod-manifest --dir prod-manifest 2>/dev/null; then
+            echo "Deferring to manifest from run $RUN_ID"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Run $RUN_ID has no prod-manifest artifact (expired, or predates this workflow)."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Slim build (changed models and descendants only)
+        if: steps.manifest.outputs.found == 'true'
+        working-directory: dbt_project
+        # state:modified+ selects what changed plus everything downstream of it.
+        # --defer sends unchanged refs to production instead of rebuilding them.
+        # --favor-state makes deferral win even where a relation happens to
+        # exist in the CI schema from an earlier run on the same PR, so a
+        # partially-populated schema cannot mask a broken ref.
+        run: |
+          dbt build \
+            --target ci \
+            --select state:modified+ \
+            --defer \
+            --favor-state \
+            --state ../prod-manifest
+
+      - name: Full build (no production manifest to defer against)
+        if: steps.manifest.outputs.found != 'true'
+        working-directory: dbt_project
+        # The first PR, or one opened after the artifact expired. Building
+        # everything is slower but correct; silently skipping the build would
+        # let a broken PR merge.
+        run: dbt build --target ci
+
+      - name: Drop the CI schemas
+        # always(), so a failed build does not leave schemas behind on Neon.
+        # dbt appends each model's custom schema to the target, producing
+        # ci_pr_12_staging, ci_pr_12_marts and so on, so every schema matching
+        # the prefix is dropped rather than just the base one.
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, psycopg
+          prefix = os.environ["DBT_CI_SCHEMA"]
+          dsn = (
+              f"host={os.environ['NEON_HOST']} "
+              f"port={os.environ.get('NEON_PORT') or 5432} "
+              f"user={os.environ['NEON_USER']} "
+              f"password={os.environ['NEON_PASSWORD']} "
+              f"dbname={os.environ['NEON_DB']} sslmode=require connect_timeout=30"
+          )
+          with psycopg.connect(dsn, autocommit=True) as conn:
+              rows = conn.execute(
+                  "select nspname from pg_namespace where nspname = %s or nspname like %s",
+                  (prefix, prefix + "\\_%"),
+              ).fetchall()
+              for (schema,) in rows:
+                  print("dropping", schema)
+                  conn.execute(f'drop schema if exists "{schema}" cascade')
+              if not rows:
+                  print("nothing to drop")
+          PY
+        env:
+          DBT_CI_SCHEMA: ci_pr_${{ github.event.pull_request.number }}
+
+  # ------------------------------------------------------------------
+  # Production build. Pushes to main only. Publishes the manifest the next
+  # PR defers against.
+  # ------------------------------------------------------------------
+  prod-build:
+    if: github.event_name == 'push'
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install dbt-postgres
+
+      - name: dbt deps
+        working-directory: dbt_project
+        run: dbt deps
+
+      - name: Parse Neon connection details
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import os
+          from urllib.parse import urlparse, unquote
+          u = urlparse(os.environ["DATABASE_URL"])
+          print(f"NEON_HOST={u.hostname}")
+          print(f"NEON_PORT={u.port or 5432}")
+          print(f"NEON_USER={unquote(u.username or '')}")
+          print(f"NEON_PASSWORD={unquote(u.password or '')}")
+          print(f"NEON_DB={u.path.lstrip('/')}")
+          PY
+
+      - name: Source freshness
+        working-directory: dbt_project
+        # Does not fail the build. A stale source means the collector has a
+        # problem, which is worth seeing, but it is not a reason to block a
+        # modelling change from landing.
+        continue-on-error: true
+        run: dbt source freshness --target prod
+
+      - name: Build production
+        working-directory: dbt_project
+        run: dbt build --target prod
+
+      - name: Publish manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-manifest
+          path: dbt_project/target/manifest.json
+          # Comfortably longer than any PR should stay open. If it does expire,
+          # the PR job falls back to a full build rather than failing.
+          retention-days: 30

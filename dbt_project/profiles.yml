@@ -46,3 +46,27 @@ radar:
       # Neon scales compute to zero when idle; the first connection after a
       # quiet period has a few seconds of cold start. Do not lower this.
       connect_timeout: 30
+
+    # Ephemeral target for pull-request CI. Same Neon instance as prod, but
+    # built into a per-PR schema prefix that the workflow drops afterwards.
+    #
+    # It has to be the SAME database as prod, not a throwaway container:
+    # `--defer` resolves unchanged upstream models to relations that must
+    # actually exist. A fresh empty Postgres has no `analytics` schema to defer
+    # to, so deferral silently degrades into building everything, which is the
+    # opposite of Slim CI.
+    #
+    # dbt appends each model's custom schema to this, so a run produces
+    # ci_pr_12_staging, ci_pr_12_intermediate and so on. The cleanup step drops
+    # every schema matching the prefix, not just this one.
+    ci:
+      type: postgres
+      host: "{{ env_var('NEON_HOST') }}"
+      port: "{{ env_var('NEON_PORT', '5432') | int }}"
+      user: "{{ env_var('NEON_USER') }}"
+      password: "{{ env_var('NEON_PASSWORD') }}"
+      dbname: "{{ env_var('NEON_DB') }}"
+      schema: "{{ env_var('DBT_CI_SCHEMA', 'ci_local') }}"
+      threads: 4
+      sslmode: require
+      connect_timeout: 30

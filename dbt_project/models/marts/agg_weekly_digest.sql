@@ -51,20 +51,20 @@ ranked as (
             order by
                 e.materiality_score desc,
                 case e.change_type
-                    when 'archived'               then 1
-                    when 'license_changed'        then 2
+                    when 'archived' then 1
+                    when 'license_changed' then 2
                     when 'renamed_or_transferred' then 3
-                    when 'breaking_release'       then 4
-                    when 'major_release'          then 5
-                    when 'went_stale'             then 6
+                    when 'breaking_release' then 4
+                    when 'major_release' then 5
+                    when 'went_stale' then 6
                     else 7
                 end,
                 e.detected_at desc,
-                e.repo_full_name
+                e.repo_full_name asc
         ) as digest_rank
 
-    from events e
-    left join weekly_gaps g on e.detected_week = g.detected_week
+    from events as e
+    left join weekly_gaps as g on e.detected_week = g.detected_week
 
 )
 

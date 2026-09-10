@@ -25,10 +25,10 @@ select
     priority,
 
     detected_at,
-    cast(date_trunc('week',  detected_at) as date)  as detected_week,
-    cast(date_trunc('month', detected_at) as date)  as detected_month,
+    cast(date_trunc('week', detected_at) as date)      as detected_week,
+    cast(date_trunc('month', detected_at) as date)     as detected_month,
     cast(extract(isoyear from detected_at) as integer) as detected_iso_year,
-    cast(extract(week    from detected_at) as integer) as detected_iso_week,
+    cast(extract(week from detected_at) as integer)    as detected_iso_week,
 
     change_type,
     source_model,
@@ -39,10 +39,10 @@ select
 
     base_materiality,
     materiality,
-    cast(materiality_score as integer)              as materiality_score,
-    cast(priority_adjustment as integer)            as priority_adjustment,
-    cast(abandonment_adjustment as integer)         as abandonment_adjustment,
+    cast(materiality_score as integer)                 as materiality_score,
+    cast(priority_adjustment as integer)               as priority_adjustment,
+    cast(abandonment_adjustment as integer)            as abandonment_adjustment,
 
-    cast(days_since_push as integer)                as days_since_push
+    cast(days_since_push as integer)                   as days_since_push
 
 from events

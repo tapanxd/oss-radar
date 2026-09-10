@@ -25,9 +25,9 @@ renamed as (
 
         -- Derived here rather than downstream because it is a pure restatement
         -- of columns already present, not logic.
-        (started_at at time zone 'UTC')::date        as run_date,
-        finished_at is null                          as is_incomplete,
-        repos_failed > 0 or repos_skipped > 0        as is_partial
+        (started_at at time zone 'UTC')::date as run_date,
+        finished_at is null                   as is_incomplete,
+        repos_failed > 0 or repos_skipped > 0 as is_partial
 
     from source
 

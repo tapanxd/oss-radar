@@ -29,9 +29,15 @@ the conflict.
   `raw.collection_runs`). It has been running since 2026-09-09 and
   must not be interrupted — the whole project depends on uninterrupted daily
   history that cannot be backfilled.
-- **Phase 1 (dbt warehouse) — IN PROGRESS.** Dev environment and staging layer
-  are built and green (`make reset` rebuilds everything from an empty volume).
-  Next: `int_repo_state_history`, the SCD2 spine.
+- **Phase 1 (dbt warehouse) — MODELLING AND CI COMPLETE, NOT YET PROVEN IN
+  ANGER.** All 13 models built: staging, the five intermediate detectors, the
+  union, and five marts. 172 dbt tests + 13 pytest tests pass. sqlfluff clean.
+  `make ci` runs the whole CI sequence locally; `make reset` rebuilds from an
+  empty volume.
+
+  Slim CI is written and its selection is verified (touching one model selects
+  7 of 13 and defers the rest), but **it has never actually run on GitHub** —
+  see "What is not done yet" below.
 - **Phase 2 (Airflow) — NOT STARTED.**
 - **Phase 3 (polish/README) — NOT STARTED.**
 
@@ -41,6 +47,26 @@ Before touching anything, run this and don't proceed if it looks wrong:
 select count(*), max(observed_date), min(observed_date)
 from raw.repo_observations;
 ```
+
+### What is not done yet
+
+- **Neon has no `analytics` schema.** dbt has never been run against prod. The
+  first push to `main` triggers `prod-build`, which creates it and publishes
+  the manifest that Slim CI defers against. Until then a PR falls back to a
+  full build, which the workflow handles deliberately rather than failing.
+- **CI has never run.** `.github/workflows/ci.yml` is committed but unproven.
+- **No digest has been rendered.** `agg_weekly_digest` produces the rows;
+  nothing writes `digests/YYYY-WW.md` yet. That is Phase 2's
+  `render_markdown` task.
+- Phase 2 (Airflow) and Phase 3 (README, dashboard) not started.
+
+### Data reality check
+
+Only 2 days of history so far (2026-09-09, 2026-09-10). Every windowed signal
+is correctly refusing to report: 0 star spikes, caveat "insufficient history:
+2 of 7 days". Models that need no history already work — 6 release events
+including 2 genuine breaking releases, 3 archived repos, 5 transferred repos,
+1 stale repo. Do not "fix" the empty velocity output; it is the guard working.
 
 ---
 
@@ -128,13 +154,18 @@ collector/          Phase 0 — built, don't touch casually
   .env.example
 .github/workflows/
   collect.yml       daily cron — built
-  ci.yml            Slim CI — TO BUILD in Phase 1
+  ci.yml            Slim CI — written, never yet run on GitHub
 Makefile             every workflow: up/seed/build/reset. `make help` lists them
 docker-compose.yml   dev Postgres: `warehouse` + `airflow` databases
 init/                first-boot SQL for the dev container
 scripts/seed_dev.sh  reload dev warehouse from Neon; read-only against prod
-dbt_project/         staging built; intermediate + marts TO BUILD
-  profiles.yml       in-repo, not ~/.dbt, so a clone runs with no local setup
+dbt_project/         all 13 models built and tested
+  profiles.yml       in-repo, not ~/.dbt; targets dev / prod / ci
+  macros/            parse_semver.sql, materiality.sql (ranking weights)
+  seeds/             breaking_change_markers.csv
+tests/               pytest: collector idempotency, rate limits, config
+.sqlfluff            lint config; `make lint` / `make fix`
+pytest.ini
 dags/                TO BUILD in Phase 2
 digests/             weekly digests land here — commit them, don't gitignore
 DESIGN.md            source of truth
@@ -171,6 +202,15 @@ DESIGN.md            source of truth
 - Re-seeding fails once dbt has built views on `raw` unless the schema is
   dropped CASCADE — `pg_dump --clean` emits a plain DROP that errors on
   dependents.
+- sqlfluff's Postgres dialect cannot parse `is distinct from` inside a `CASE`.
+  Use the `(a is distinct from b)::int` cast form instead — same meaning, and
+  it parses. Do NOT switch to `<>`; that silently loses NULL transitions.
+- Slim CI must run against the SAME Neon database as prod. `--defer` rewrites
+  unchanged `ref()`s to production relations, so a fresh empty Postgres has
+  nothing to defer to and deferral silently degrades into a full build.
+- CI parses `DATABASE_URL` into `NEON_*` components at runtime. dbt-postgres
+  cannot take a connection URL, and five separate secrets would drift out of
+  sync with the one the collector already uses.
 
 ---
 

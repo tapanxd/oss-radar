@@ -11,7 +11,7 @@ with source as (
 renamed as (
 
     select
-        id                                          as observation_id,
+        id                                                            as observation_id,
 
         -- IDENTITY
         --
@@ -28,12 +28,12 @@ renamed as (
         --   api_full_name   What the API actually returned. GitHub transparently
         --                   redirects renamed repos, so this differing from
         --                   repo_full_name IS the rename signal.
-        (raw_repo_payload ->> 'id')::bigint          as github_repo_id,
+        (raw_repo_payload ->> 'id')::bigint                           as github_repo_id,
         repo_full_name,
-        raw_repo_payload ->> 'full_name'             as api_full_name,
-        split_part(repo_full_name, '/', 1)          as repo_owner,
-        split_part(repo_full_name, '/', 2)          as repo_name,
-        split_part(raw_repo_payload ->> 'full_name', '/', 1) as api_repo_owner,
+        raw_repo_payload ->> 'full_name'                              as api_full_name,
+        split_part(repo_full_name, '/', 1)                            as repo_owner,
+        split_part(repo_full_name, '/', 2)                            as repo_name,
+        split_part(raw_repo_payload ->> 'full_name', '/', 1)          as api_repo_owner,
         category,
         priority,
 

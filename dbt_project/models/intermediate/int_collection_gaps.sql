@@ -67,7 +67,7 @@ date_spine as (
 
     select generate_series(
         (select first_observed_date from observation_bounds),
-        (select last_observed_date  from observation_bounds),
+        (select last_observed_date from observation_bounds),
         interval '1 day'
     )::date as calendar_date
 
@@ -77,10 +77,10 @@ repo_coverage_window as (
 
     select
         github_repo_id,
-        min(repo_full_name)  as repo_full_name,
-        min(category)        as category,
-        min(priority)        as priority,
-        min(observed_date)   as tracking_started_on
+        min(repo_full_name) as repo_full_name,
+        min(category)       as category,
+        min(priority)       as priority,
+        min(observed_date)  as tracking_started_on
     from observations
     group by github_repo_id
 
@@ -96,8 +96,8 @@ expected as (
         r.category,
         r.priority,
         d.calendar_date
-    from repo_coverage_window r
-    cross join date_spine d
+    from repo_coverage_window as r
+    cross join date_spine as d
     where d.calendar_date >= r.tracking_started_on
 
 ),
@@ -109,17 +109,17 @@ gaps as (
         e.repo_full_name,
         e.category,
         e.priority,
-        e.calendar_date                                 as missing_date,
+        e.calendar_date                    as missing_date,
 
-        cr.run_date is not null                         as collector_ran_that_day,
-        coalesce(cr.is_partial, false)                  as run_was_partial,
-        coalesce(cr.is_incomplete, false)               as run_was_incomplete,
-        coalesce(cr.rate_limit_hit, false)              as run_hit_rate_limit,
+        cr.run_date is not null            as collector_ran_that_day,
+        coalesce(cr.is_partial, false)     as run_was_partial,
+        coalesce(cr.is_incomplete, false)  as run_was_incomplete,
+        coalesce(cr.rate_limit_hit, false) as run_hit_rate_limit,
 
         case
             -- No run row at all: the cron did not fire, or died before it
             -- could record itself. Affects every repo on that date.
-            when cr.run_date is null            then 'collector_did_not_run'
+            when cr.run_date is null then 'collector_did_not_run'
             -- The collector ran and stopped cleanly partway through, which is
             -- the designed behaviour at the rate-limit floor.
             when coalesce(cr.rate_limit_hit, false) then 'rate_limit_reached'
@@ -130,14 +130,14 @@ gaps as (
             -- It ran, completed, reported no problems, and yet this repo has
             -- no row. That is an unexplained hole and should be looked at.
             else 'unexplained'
-        end                                             as gap_reason
+        end                                as gap_reason
 
-    from expected e
-    left join observations o
-      on  e.github_repo_id = o.github_repo_id
-      and e.calendar_date  = o.observed_date
-    left join collection_runs cr
-      on  e.calendar_date  = cr.run_date
+    from expected as e
+    left join observations as o
+      on e.github_repo_id = o.github_repo_id
+      and e.calendar_date = o.observed_date
+    left join collection_runs as cr
+      on e.calendar_date = cr.run_date
     where o.github_repo_id is null
 
 )

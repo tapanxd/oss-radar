@@ -22,7 +22,7 @@ LOAD_ENV := set -a; [ -f .env ] && . ./.env; set +a;
 DBT := ../.venv/Scripts/dbt.exe
 DBT_DIR := dbt_project
 
-.PHONY: help up down nuke seed debug build test docs collect collect-dry fresh reset check
+.PHONY: help up down nuke seed debug build test docs collect collect-dry fresh reset check lint fix pytest ci
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) \
@@ -65,7 +65,18 @@ docs:  ## Generate and serve dbt docs
 
 reset: nuke up seed build  ## Rebuild the dev environment from scratch
 
+lint:  ## Lint every dbt model with sqlfluff
+	@$(LOAD_ENV) .venv/Scripts/sqlfluff.exe lint dbt_project/models --processes 2
+
+fix:  ## Auto-fix sqlfluff formatting violations
+	@$(LOAD_ENV) .venv/Scripts/sqlfluff.exe fix dbt_project/models --processes 2 --force
+
+pytest:  ## Run the collector test suite
+	@$(LOAD_ENV) .venv/Scripts/python.exe -m pytest
+
 check: fresh build  ## What CI runs: freshness, then a full build with tests
+
+ci: lint pytest check  ## Everything CI runs, locally, before opening a PR
 
 collect-dry:  ## Run the collector against GitHub without writing anything
 	@$(LOAD_ENV) .venv/Scripts/python.exe collector/collect.py --config collector/repos.yml --dry-run

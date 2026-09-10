@@ -37,7 +37,7 @@ with_previous as (
         github_repo_id,
         state_sequence,
         repo_full_name,
-        valid_from                                          as detected_at,
+        valid_from as detected_at,
         is_initial_state,
 
         -- category and priority are not listed here: they are in the tracked
@@ -48,13 +48,13 @@ with_previous as (
         {{ attr.column }},
         lag({{ attr.column }}) over (
             partition by github_repo_id order by state_sequence
-        ) as previous_{{ attr.column }},
+        )          as previous_{{ attr.column }},
         {% endfor %}
 
         is_archived,
         lag(is_archived) over (
             partition by github_repo_id order by state_sequence
-        ) as previous_is_archived
+        )          as previous_is_archived
 
     from state_history
 
@@ -72,11 +72,11 @@ attribute_changes as (
         priority,
         detected_at,
         state_sequence,
-        '{{ attr.change_type }}'                    as change_type,
-        '{{ attr.materiality }}'                    as base_materiality,
-        '{{ attr.column }}'                         as changed_attribute,
-        previous_{{ attr.column }}::text            as before_value,
-        {{ attr.column }}::text                     as after_value
+        '{{ attr.change_type }}'         as change_type,
+        '{{ attr.materiality }}'         as base_materiality,
+        '{{ attr.column }}'              as changed_attribute,
+        previous_{{ attr.column }}::text as before_value,
+        {{ attr.column }}::text          as after_value
     from with_previous
     where not is_initial_state
       -- `is distinct from`, not `<>`: with plain inequality a NULL on either
@@ -114,7 +114,7 @@ final as (
     select
         {{ dbt_utils.generate_surrogate_key([
             'github_repo_id', 'state_sequence', 'change_type'
-        ]) }}                                       as change_key,
+        ]) }}   as change_key,
 
         github_repo_id,
         repo_full_name,
@@ -133,11 +133,11 @@ final as (
         -- after pair, so it is assembled here rather than left to the digest
         -- renderer to reconstruct.
         json_build_object(
-            'attribute',   changed_attribute,
-            'before',      before_value,
-            'after',       after_value,
+            'attribute', changed_attribute,
+            'before', before_value,
+            'after', after_value,
             'detected_at', detected_at
-        )::text                                     as evidence
+        )::text as evidence
 
     from attribute_changes
 

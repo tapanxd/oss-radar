@@ -21,7 +21,7 @@ latest_activity as (
 
     select distinct on (github_repo_id)
         github_repo_id,
-        observed_date       as last_observed_date,
+        observed_date as last_observed_date,
         stars,
         forks,
         open_issues,
@@ -29,7 +29,7 @@ latest_activity as (
         is_stale,
         days_of_history
     from {{ ref('int_activity_signals') }}
-    order by github_repo_id, observed_date desc
+    order by github_repo_id asc, observed_date desc
 
 ),
 
@@ -38,7 +38,7 @@ change_counts as (
     select
         github_repo_id,
         count(*)                                                    as total_change_events,
-        count(*) filter (where materiality in ('critical','high'))  as material_change_events,
+        count(*) filter (where materiality in ('critical', 'high')) as material_change_events,
         max(detected_at)                                            as last_change_detected_at
     from {{ ref('int_change_events') }}
     group by github_repo_id
@@ -80,16 +80,16 @@ select
     a.forks,
     a.open_issues,
     a.days_since_push,
-    coalesce(a.is_stale, false)                     as is_stale,
+    coalesce(a.is_stale, false)                         as is_stale,
 
-    s.valid_from                                    as current_state_since,
+    s.valid_from                                        as current_state_since,
     a.last_observed_date,
-    coalesce(a.days_of_history, 0)                  as days_tracked,
+    coalesce(a.days_of_history, 0)                      as days_tracked,
 
-    coalesce(c.total_change_events, 0)              as total_change_events,
-    coalesce(c.material_change_events, 0)           as material_change_events,
+    coalesce(c.total_change_events, 0)                  as total_change_events,
+    coalesce(c.material_change_events, 0)               as material_change_events,
     c.last_change_detected_at,
-    coalesce(g.missing_observation_days, 0)         as missing_observation_days,
+    coalesce(g.missing_observation_days, 0)             as missing_observation_days,
 
     -- PRE-EXISTING CONDITIONS, not change events.
     --
@@ -101,7 +101,7 @@ select
     (s.repo_full_name is distinct from s.api_full_name) as is_renamed_from_config,
     (s.is_archived and s.state_sequence = 1)            as was_archived_before_tracking
 
-from current_state s
-left join latest_activity a on s.github_repo_id = a.github_repo_id
-left join change_counts   c on s.github_repo_id = c.github_repo_id
-left join gap_counts      g on s.github_repo_id = g.github_repo_id
+from current_state as s
+left join latest_activity as a on s.github_repo_id = a.github_repo_id
+left join change_counts as c on s.github_repo_id = c.github_repo_id
+left join gap_counts as g on s.github_repo_id = g.github_repo_id

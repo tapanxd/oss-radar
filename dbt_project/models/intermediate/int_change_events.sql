@@ -95,22 +95,22 @@ went_stale_events as (
     select
         {{ dbt_utils.generate_surrogate_key([
             'github_repo_id', 'observed_date', "'went_stale'"
-        ]) }}                                       as change_key,
+        ]) }}                  as change_key,
         github_repo_id,
         repo_full_name,
         category,
         priority,
-        observed_date                               as detected_at,
-        'went_stale'                                as change_type,
-        'medium'                                    as base_materiality,
-        'active'                                    as before_value,
-        'stale'                                     as after_value,
+        observed_date          as detected_at,
+        'went_stale'           as change_type,
+        'medium'               as base_materiality,
+        'active'               as before_value,
+        'stale'                as after_value,
         json_build_object(
             'days_since_push', days_since_push,
-            'threshold_days',  180,
-            'detected_at',     observed_date
-        )::text                                     as evidence,
-        'int_activity_signals'                      as source_model
+            'threshold_days', 180,
+            'detected_at', observed_date
+        )::text                as evidence,
+        'int_activity_signals' as source_model
     from activity_with_previous
     -- previous_is_stale must be explicitly false, not merely "not true". On a
     -- repo's first observation the lag is NULL, and treating NULL as false
@@ -124,28 +124,28 @@ star_spike_events as (
     select
         {{ dbt_utils.generate_surrogate_key([
             'github_repo_id', 'observed_date', "'star_spike'"
-        ]) }}                                       as change_key,
+        ]) }}                        as change_key,
         github_repo_id,
         repo_full_name,
         category,
         priority,
-        observed_date                               as detected_at,
-        'star_spike'                                as change_type,
-        'low'                                       as base_materiality,
-        stars_per_day_baseline::text                as before_value,
-        stars_per_day_recent::text                  as after_value,
+        observed_date                as detected_at,
+        'star_spike'                 as change_type,
+        'low'                        as base_materiality,
+        stars_per_day_baseline::text as before_value,
+        stars_per_day_recent::text   as after_value,
         json_build_object(
-            'stars',                  stars,
-            'stars_per_day_recent',   stars_per_day_recent,
+            'stars', stars,
+            'stars_per_day_recent', stars_per_day_recent,
             'stars_per_day_baseline', stars_per_day_baseline,
-            'multiple',               round(
+            'multiple', round(
                                           stars_per_day_recent
                                           / nullif(stars_per_day_baseline, 0), 2
                                       ),
-            'days_of_history',        days_of_history,
-            'detected_at',            observed_date
-        )::text                                     as evidence,
-        'int_activity_signals'                      as source_model
+            'days_of_history', days_of_history,
+            'detected_at', observed_date
+        )::text                      as evidence,
+        'int_activity_signals'       as source_model
     from activity_with_previous
     where is_star_spike and previous_is_star_spike = false
 
@@ -170,10 +170,10 @@ with_activity_context as (
     select
         u.*,
         a.days_since_push
-    from unioned u
-    left join {{ ref('int_activity_signals') }} a
-      on  u.github_repo_id = a.github_repo_id
-      and u.detected_at    = a.observed_date
+    from unioned as u
+    left join {{ ref('int_activity_signals') }} as a
+      on u.github_repo_id = a.github_repo_id
+      and u.detected_at = a.observed_date
 
 ),
 
@@ -189,7 +189,7 @@ ranked as (
         case
             when days_since_push >= {{ abandoned_after_days() }} then -1
             else 0
-        end                                          as abandonment_adjustment
+        end                                           as abandonment_adjustment
 
     from with_activity_context
 
@@ -221,7 +221,7 @@ final as (
         -- below low.
         greatest(1, least(4,
             base_score + priority_adjustment + abandonment_adjustment
-        ))                                           as materiality_score,
+        ))   as materiality_score,
 
         {{ materiality_label(
             'greatest(1, least(4, base_score + priority_adjustment + abandonment_adjustment))'

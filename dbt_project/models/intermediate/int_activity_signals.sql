@@ -98,13 +98,13 @@ metrics as (
     select
         *,
 
-        stars - previous_stars                          as stars_delta_day,
+        stars - previous_stars                                as stars_delta_day,
 
-        (observed_date - repo_pushed_at::date)          as days_since_push,
+        (observed_date - repo_pushed_at::date)                as days_since_push,
 
         -- Sufficiency. A window is only trusted once it is actually filled.
-        (days_of_history >= {{ velocity_window_days }}) as has_velocity_history,
-        (days_of_history >= {{ baseline_window_days }}) as has_baseline_history,
+        (days_of_history >= {{ velocity_window_days }})       as has_velocity_history,
+        (days_of_history >= {{ baseline_window_days }})       as has_baseline_history,
 
         nullif(observed_date - velocity_window_start_date, 0) as velocity_window_days_actual,
         nullif(observed_date - baseline_window_start_date, 0) as baseline_window_days_actual
@@ -125,13 +125,13 @@ rates as (
             when has_velocity_history
             then (stars - stars_at_velocity_window_start)::numeric
                  / velocity_window_days_actual
-        end                                             as stars_per_day_recent,
+        end as stars_per_day_recent,
 
         case
             when has_baseline_history
             then (stars - stars_at_baseline_window_start)::numeric
                  / baseline_window_days_actual
-        end                                             as stars_per_day_baseline
+        end as stars_per_day_baseline
 
     from metrics
 
@@ -152,8 +152,8 @@ final as (
         stars_delta_day,
         days_of_history,
 
-        round(stars_per_day_recent, 3)                  as stars_per_day_recent,
-        round(stars_per_day_baseline, 3)                as stars_per_day_baseline,
+        round(stars_per_day_recent, 3)              as stars_per_day_recent,
+        round(stars_per_day_baseline, 3)            as stars_per_day_baseline,
 
         has_velocity_history,
         has_baseline_history,
@@ -168,11 +168,11 @@ final as (
             and has_baseline_history
             and stars_per_day_baseline > 0
             and stars_per_day_recent > {{ spike_multiple }} * stars_per_day_baseline
-        )                                               as is_star_spike,
+        )                                           as is_star_spike,
 
         repo_pushed_at,
         days_since_push,
-        (days_since_push >= {{ stale_after_days }})     as is_stale,
+        (days_since_push >= {{ stale_after_days }}) as is_stale,
 
         -- Carried so downstream models and the digest can say WHY a signal is
         -- absent instead of just omitting the repo.
@@ -183,7 +183,7 @@ final as (
             when not has_baseline_history
             then 'no baseline: ' || days_of_history
                  || ' of {{ baseline_window_days }} days'
-        end                                             as velocity_caveat
+        end                                         as velocity_caveat
 
     from rates
 

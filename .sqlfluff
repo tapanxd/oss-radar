@@ -1,0 +1,56 @@
+[sqlfluff]
+dialect = postgres
+templater = dbt
+max_line_length = 100
+
+# Rules switched off deliberately, each for a reason:
+#
+#  LT02/LT05  indentation and line length inside the generated Jinja loops in
+#             int_metadata_changes cannot be controlled from the source.
+#  ST06       column ordering is grouped by meaning here (identity, then
+#             config, then measures), which reads better than the rule's
+#             preferred ordering.
+#  AM04       "query produces unknown columns" fires on every `select *` from a
+#             CTE, which is the house style in staging.
+#  RF01       cannot resolve columns through dbt ref() at lint time.
+#  ST07       `using` vs explicit join keys - explicit is used throughout.
+#  LT14       `order by` inside string_agg() is an argument, not a clause;
+#             forcing it onto its own line makes the call harder to read.
+#  AM06       `group by 1, 2` is used where the grouped expressions are
+#             casts; repeating a cast in the group by is worse, not better.
+exclude_rules = LT02, LT05, ST06, AM04, RF01, ST07, LT09, ST05, CP03, LT14, AM06
+
+# Column aliases are aligned deliberately - it makes a 30-column select
+# scannable - but alignment is not machine-enforced. Setting `align` here makes
+# LT01 demand perfect alignment, which is unsatisfiable in selects containing a
+# multi-line expression, and it reports those as unfixable. `any` drops the
+# spacing check for aliases specifically while leaving LT01 active everywhere
+# else, so real spacing mistakes are still caught.
+[sqlfluff:layout:type:alias_expression]
+spacing_before = any
+
+[sqlfluff:indentation]
+indented_joins = false
+indented_using_on = true
+template_blocks_indent = false
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.identifiers]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.literals]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.types]
+extended_capitalisation_policy = lower
+
+[sqlfluff:templater:dbt]
+project_dir = dbt_project
+profiles_dir = dbt_project
+profile = radar
+target = dev

@@ -62,6 +62,23 @@ hashed as (
 
 ),
 
+-- The lag is taken in its own step rather than inline in the comparison
+-- below. It reads better, and it keeps the window function out of an
+-- `is distinct from` expression, which sqlfluff's Postgres dialect cannot
+-- parse.
+with_previous_hash as (
+
+    select
+        *,
+        lag(state_hash) over (
+            partition by github_repo_id
+            order by observed_date
+        ) as previous_state_hash
+
+    from hashed
+
+),
+
 marked as (
 
     select
@@ -69,18 +86,15 @@ marked as (
 
         -- `is distinct from` rather than `<>`. With plain inequality a NULL on
         -- either side yields NULL, not true, so the very first observation of
-        -- a repo (where lag is NULL) would not be marked as a new state and
-        -- the repo would be silently missing from its own history.
-        case
-            when state_hash is distinct from lag(state_hash) over (
-                partition by github_repo_id
-                order by observed_date
-            )
-            then 1
-            else 0
-        end as starts_new_state
+        -- a repo (where the lag is NULL) would not be marked as a new state
+        -- and the repo would be silently missing from its own history.
+        --
+        -- Cast rather than wrapped in a CASE: it says the same thing in one
+        -- line, and sqlfluff's Postgres dialect cannot parse `is distinct
+        -- from` inside a CASE expression.
+        (state_hash is distinct from previous_state_hash)::int as starts_new_state
 
-    from hashed
+    from with_previous_hash
 
 ),
 
