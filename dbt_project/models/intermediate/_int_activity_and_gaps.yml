@@ -1,0 +1,196 @@
+version: 2
+
+models:
+  - name: int_activity_signals
+    description: >
+      Grain: one row per repo per observed date.
+      Rate-based activity metrics - star velocity, days since last push, and
+      current staleness. int_change_events turns transitions in these flags
+      into events; this model only measures.
+
+      Every windowed metric is paired with a sufficiency flag and is NULL
+      until its window is genuinely filled. Computing a 7-day velocity from
+      two days of data and comparing it to a 90-day mean built from the same
+      two days would report a star spike for every repo, which is worse than
+      reporting nothing because it looks like signal.
+
+      days_since_push is not gated, because repo_pushed_at is an absolute
+      timestamp from the API and staleness is knowable from the first
+      observation.
+    columns:
+      - name: github_repo_id
+        description: Stable GitHub numeric id.
+        data_tests: [not_null]
+      - name: observed_date
+        description: Date of the observation this row measures.
+        data_tests: [not_null]
+      - name: days_of_history
+        description: >
+          Observations accumulated for THIS repo up to this date. Sufficiency
+          keys off this rather than the project-wide range, since a repo added
+          to repos.yml later has less history than the rest.
+        data_tests: [not_null]
+      - name: stars_per_day_recent
+        description: Mean stars per day over the 7-day window. NULL until the window is filled - NULL means "not known", 0 would mean "no growth".
+      - name: stars_per_day_baseline
+        description: Mean stars per day over the 90-day window. NULL until filled.
+      - name: has_velocity_history
+        description: Whether 7 days of observations exist for this repo.
+        data_tests: [not_null]
+      - name: has_baseline_history
+        description: Whether 90 days of observations exist for this repo.
+        data_tests: [not_null]
+      - name: is_star_spike
+        description: >
+          Recent velocity exceeds 3x the baseline, both windows are filled, and
+          the baseline is non-zero. The threshold is judgement, not a validated
+          model, and the README says so.
+        data_tests: [not_null]
+      - name: days_since_push
+        description: Days between the observation and the last push to the default branch.
+      - name: is_stale
+        description: No push in 180 days or more.
+      - name: velocity_caveat
+        description: >
+          Human-readable reason a velocity figure is absent, so the digest can
+          say why a repo has no signal instead of silently omitting it.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [github_repo_id, observed_date]
+      # The central guarantee of this model: never claim a spike without the
+      # history to justify it.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "not is_star_spike or (has_velocity_history and has_baseline_history)"
+      # A velocity figure must not exist without its window being filled.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "stars_per_day_recent is null or has_velocity_history"
+
+  - name: int_collection_gaps
+    description: >
+      Grain: one row per repo per date it should have been observed but was not.
+      Makes blind spots queryable. Without this, a week where the collector was
+      silently disabled looks identical to a week where nothing happened, and
+      the digest implies continuous coverage it does not have.
+
+      Distinguishes "the collector never ran" (infrastructure failure, affects
+      every repo) from "the collector ran but skipped this repo" (rate-limit
+      floor or per-repo fetch failure). These imply different amounts of doubt
+      about the rest of the digest, so they are not collapsed together.
+    columns:
+      - name: gap_key
+        description: Surrogate key over repo and missing date.
+        data_tests: [not_null, unique]
+      - name: github_repo_id
+        description: Repo that has no observation on this date.
+        data_tests: [not_null]
+      - name: missing_date
+        description: Date on which the repo should have been observed.
+        data_tests: [not_null]
+      - name: collector_ran_that_day
+        description: Whether any collection run was recorded for the date.
+        data_tests: [not_null]
+      - name: gap_reason
+        description: Best available explanation for the missing observation.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - collector_did_not_run
+                  - rate_limit_reached
+                  - repo_skipped_or_failed
+                  - run_died_mid_flight
+                  - unexplained
+
+unit_tests:
+  - name: refuses_to_claim_a_spike_without_history
+    model: int_activity_signals
+    description: >
+      Two days of explosive star growth must NOT produce a spike, because
+      neither the 7-day nor the 90-day window is filled. This is the guard that
+      stops the first weeks of the project emitting nonsense.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 1, observed_date: "2026-01-01", repo_full_name: "o/r", category: "c", priority: "normal", stars: 100, forks: 1, open_issues: 0, repo_pushed_at: "2026-01-01 00:00:00+00"}
+          - {github_repo_id: 1, observed_date: "2026-01-02", repo_full_name: "o/r", category: "c", priority: "normal", stars: 9000, forks: 1, open_issues: 0, repo_pushed_at: "2026-01-02 00:00:00+00"}
+    expect:
+      rows:
+        - {github_repo_id: 1, observed_date: "2026-01-01", is_star_spike: false, has_velocity_history: false, stars_per_day_recent: null}
+        - {github_repo_id: 1, observed_date: "2026-01-02", is_star_spike: false, has_velocity_history: false, stars_per_day_recent: null}
+
+  - name: staleness_needs_no_accumulated_history
+    model: int_activity_signals
+    description: >
+      repo_pushed_at is absolute, so a repo untouched for 200 days reads as
+      stale on its very first observation, while a freshly pushed one does not.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 2, observed_date: "2026-08-01", repo_full_name: "o/stale", category: "c", priority: "normal", stars: 10, forks: 0, open_issues: 0, repo_pushed_at: "2026-01-01 00:00:00+00"}
+          - {github_repo_id: 3, observed_date: "2026-08-01", repo_full_name: "o/fresh", category: "c", priority: "normal", stars: 10, forks: 0, open_issues: 0, repo_pushed_at: "2026-07-31 00:00:00+00"}
+    expect:
+      rows:
+        - {github_repo_id: 2, observed_date: "2026-08-01", days_since_push: 212, is_stale: true}
+        - {github_repo_id: 3, observed_date: "2026-08-01", days_since_push: 1, is_stale: false}
+
+  - name: finds_a_missing_day_and_names_the_reason
+    model: int_collection_gaps
+    description: >
+      A repo observed on day 1 and day 3 but not day 2. Day 2 has no collection
+      run recorded at all, so the gap must be attributed to the collector not
+      running rather than to the repo being skipped.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 1, observed_date: "2026-01-01", repo_full_name: "o/r", category: "c", priority: "normal"}
+          - {github_repo_id: 1, observed_date: "2026-01-03", repo_full_name: "o/r", category: "c", priority: "normal"}
+      - input: ref('stg_collection_runs')
+        rows:
+          - {run_date: "2026-01-01", is_partial: false, is_incomplete: false, repos_succeeded: 1, repos_failed: 0, repos_skipped: 0, rate_limit_hit: false}
+          - {run_date: "2026-01-03", is_partial: false, is_incomplete: false, repos_succeeded: 1, repos_failed: 0, repos_skipped: 0, rate_limit_hit: false}
+    expect:
+      rows:
+        - {github_repo_id: 1, missing_date: "2026-01-02", gap_reason: "collector_did_not_run", collector_ran_that_day: false}
+
+  - name: rate_limit_gap_is_distinguished_from_a_dead_cron
+    model: int_collection_gaps
+    description: >
+      The collector ran on day 2 and recorded hitting its rate-limit floor, but
+      this repo has no observation. That is the designed partial-success path,
+      not an infrastructure failure, and must be reported as such.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 1, observed_date: "2026-01-01", repo_full_name: "o/r", category: "c", priority: "normal"}
+          - {github_repo_id: 1, observed_date: "2026-01-03", repo_full_name: "o/r", category: "c", priority: "normal"}
+      - input: ref('stg_collection_runs')
+        rows:
+          - {run_date: "2026-01-01", is_partial: false, is_incomplete: false, repos_succeeded: 1, repos_failed: 0, repos_skipped: 0, rate_limit_hit: false}
+          - {run_date: "2026-01-02", is_partial: true, is_incomplete: false, repos_succeeded: 0, repos_failed: 0, repos_skipped: 1, rate_limit_hit: true}
+          - {run_date: "2026-01-03", is_partial: false, is_incomplete: false, repos_succeeded: 1, repos_failed: 0, repos_skipped: 0, rate_limit_hit: false}
+    expect:
+      rows:
+        - {github_repo_id: 1, missing_date: "2026-01-02", gap_reason: "rate_limit_reached", collector_ran_that_day: true}
+
+  - name: no_gap_before_a_repo_was_tracked
+    model: int_collection_gaps
+    description: >
+      A repo added to repos.yml partway through must not be reported as missing
+      for the dates before it existed in the config. Otherwise every newly
+      tracked repo arrives with a backlog of fictional gaps.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 1, observed_date: "2026-01-01", repo_full_name: "o/old", category: "c", priority: "normal"}
+          - {github_repo_id: 1, observed_date: "2026-01-02", repo_full_name: "o/old", category: "c", priority: "normal"}
+          - {github_repo_id: 2, observed_date: "2026-01-02", repo_full_name: "o/new", category: "c", priority: "normal"}
+      - input: ref('stg_collection_runs')
+        rows:
+          - {run_date: "2026-01-01", is_partial: false, is_incomplete: false, repos_succeeded: 1, repos_failed: 0, repos_skipped: 0, rate_limit_hit: false}
+          - {run_date: "2026-01-02", is_partial: false, is_incomplete: false, repos_succeeded: 2, repos_failed: 0, repos_skipped: 0, rate_limit_hit: false}
+    expect:
+      rows: []
