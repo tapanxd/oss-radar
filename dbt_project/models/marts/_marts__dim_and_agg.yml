@@ -1,0 +1,282 @@
+version: 2
+
+models:
+  - name: dim_repos
+    description: >
+      Grain: one row per tracked repo, current state.
+      The dimension everything joins to. Current state comes from the SCD2
+      spine rather than from the most recent observation, so a repo missing
+      from today's collection shows its last known state instead of vanishing.
+
+      Also carries the pre-existing conditions that are deliberately NOT change
+      events - a repo already archived, or already renamed, when tracking
+      began. Those are real and worth surfacing, but they are not news and must
+      never reach fct_change_events.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: github_repo_id
+        data_type: bigint
+        description: Stable GitHub numeric id. Primary key.
+        constraints: [{type: not_null}]
+        data_tests: [unique]
+      - name: repo_full_name
+        data_type: text
+        description: Path as configured in repos.yml. Stable even after the repo moves.
+        constraints: [{type: not_null}]
+        data_tests: [unique]
+      - name: api_full_name
+        data_type: text
+        description: Path GitHub currently returns. Differs from repo_full_name when the repo has moved.
+      - name: repo_owner
+        data_type: text
+        description: Owner from the configured path.
+      - name: repo_name
+        data_type: text
+        description: Name from the configured path.
+      - name: category
+        data_type: text
+        description: Tracking category from repos.yml.
+        constraints: [{type: not_null}]
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - coding-agents
+                  - mcp-servers
+                  - skills-and-plugins
+                  - eval-harnesses
+                  - orchestration
+                  - model-serving
+                  - unclassified
+      - name: priority
+        data_type: text
+        description: Tracking priority from repos.yml.
+      - name: license_spdx
+        data_type: text
+        description: Current SPDX identifier, or NULL if GitHub detects none.
+      - name: is_archived
+        data_type: boolean
+        description: Whether GitHub currently reports the repo archived.
+        constraints: [{type: not_null}]
+      - name: is_fork
+        data_type: boolean
+        description: Whether the repo is a fork.
+      - name: default_branch
+        data_type: text
+        description: Current default branch.
+      - name: description
+        data_type: text
+        description: Current repo description.
+      - name: homepage
+        data_type: text
+        description: Current homepage URL.
+      - name: primary_language
+        data_type: text
+        description: Language GitHub reports as primary.
+      - name: topics
+        data_type: text
+        description: Sorted comma-separated topic list.
+      - name: repo_created_at
+        data_type: timestamp with time zone
+        description: When the repo was created on GitHub.
+      - name: repo_pushed_at
+        data_type: timestamp with time zone
+        description: Last push to any branch.
+      - name: stars
+        data_type: integer
+        description: Stars as of the last observation.
+      - name: forks
+        data_type: integer
+        description: Forks as of the last observation.
+      - name: open_issues
+        data_type: integer
+        description: Open issues as of the last observation.
+      - name: days_since_push
+        data_type: integer
+        description: Days between the last observation and the last push.
+      - name: is_stale
+        data_type: boolean
+        description: No push in 180 days or more.
+        constraints: [{type: not_null}]
+      - name: current_state_since
+        data_type: date
+        description: When the repo entered its current metadata state.
+      - name: last_observed_date
+        data_type: date
+        description: Most recent date this repo was successfully observed.
+      - name: days_tracked
+        # bigint, not integer: this is a count() window, which Postgres returns
+        # as bigint. The contract caught the mismatch rather than letting it
+        # surface later as a silently widened column.
+        data_type: bigint
+        description: Observations accumulated for this repo. Gates what velocity signals are trustworthy.
+        constraints: [{type: not_null}]
+      - name: total_change_events
+        data_type: bigint
+        description: All detected change events for this repo.
+        constraints: [{type: not_null}]
+      - name: material_change_events
+        data_type: bigint
+        description: Change events at critical or high materiality.
+        constraints: [{type: not_null}]
+      - name: last_change_detected_at
+        data_type: date
+        description: Most recent detected change, or NULL if none yet.
+      - name: missing_observation_days
+        data_type: bigint
+        description: Days this repo should have been observed and was not.
+        constraints: [{type: not_null}]
+      - name: is_renamed_from_config
+        data_type: boolean
+        description: >
+          The configured path no longer matches what GitHub returns. True for a
+          repo that had already moved before tracking began, which produces no
+          change event but is still worth knowing.
+        constraints: [{type: not_null}]
+      - name: was_archived_before_tracking
+        data_type: boolean
+        description: Already archived at the first observation, so no archived event exists for it.
+    data_tests:
+      # Every tracked repo must appear exactly once. A shortfall means the SCD2
+      # is_current_state flag is wrong for some repo, which would silently drop
+      # it from the dashboard.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "days_tracked >= 0"
+
+  - name: agg_weekly_digest
+    description: >
+      Grain: one row per change event that qualifies for the weekly digest.
+      The headline model - this is what renders into digests/YYYY-WW.md.
+      Filtered above a materiality threshold and pre-ordered, so the renderer
+      is a dumb loop and ranking cannot drift from the warehouse.
+
+      Carries the week's collection-coverage figures so the digest states its
+      blind spots rather than implying it saw everything.
+    columns:
+      - name: detected_week
+        description: Monday of the ISO week.
+        data_tests: [not_null]
+      - name: digest_rank
+        description: Render order within the week. Deterministic, so regenerating a digest produces no spurious diff.
+        data_tests: [not_null]
+      - name: repo_full_name
+        description: Repo the entry is about.
+        data_tests: [not_null]
+      - name: change_type
+        description: What changed.
+        data_tests: [not_null]
+      - name: materiality
+        description: Final ranked materiality.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [critical, high, medium, low]
+      - name: evidence
+        description: Verifiable JSON. Every digest line must be checkable without opening GitHub.
+        data_tests: [not_null]
+      - name: week_missing_observations
+        description: Observations missing across the whole week. Non-zero means the digest must state a coverage caveat.
+        data_tests: [not_null]
+    data_tests:
+      # DESIGN.md section 8: no duplicate repo/change-type within a week, or the
+      # digest repeats itself.
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [detected_week, github_repo_id, change_type]
+      # Nothing below the threshold may leak into the digest.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "materiality_score >= 2"
+      # DESIGN.md section 8: a repo cannot be archived and ship a major release
+      # in the same week. If both appear, a detector is firing wrongly.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: >
+              not exists (
+                select 1
+                from {{ ref('agg_weekly_digest') }} a
+                join {{ ref('agg_weekly_digest') }} b
+                  on  a.github_repo_id = b.github_repo_id
+                  and a.detected_week  = b.detected_week
+                where a.change_type = 'archived'
+                  and b.change_type = 'major_release'
+              )
+
+  - name: agg_category_pulse
+    description: >
+      Grain: one row per category per ISO week.
+      Whether a corner of the ecosystem is speeding up or slowing down.
+
+      Star movement is summed from daily deltas rather than differenced across
+      week endpoints: endpoint differencing lets a collection gap silently
+      inflate the figure, whereas summing deltas simply omits the missing days.
+      Emitted as a full category-by-week grid so a quiet category is a zero row
+      rather than a hole in a chart.
+    columns:
+      - name: pulse_week
+        description: Monday of the ISO week.
+        data_tests: [not_null]
+      - name: category
+        description: Tracking category.
+        data_tests: [not_null]
+      - name: repos_observed
+        description: Distinct repos with at least one observation in the week.
+        data_tests: [not_null]
+      - name: stars_gained
+        description: Sum of daily star deltas across the category.
+        data_tests: [not_null]
+      - name: releases
+        description: Release events of any kind detected in the week.
+        data_tests: [not_null]
+      - name: breaking_releases
+        description: Releases flagged breaking by a seeded marker.
+        data_tests: [not_null]
+      - name: missing_observations
+        description: Observations that should have been collected and were not.
+        data_tests: [not_null]
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [pulse_week, category]
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "breaking_releases <= releases"
+
+  - name: agg_repo_timeline
+    description: >
+      Grain: one row per repo per calendar month.
+      Per-repo history. Answers the questions a notification feed cannot -
+      which projects went quiet, when a licence moved, how a repo behaved over
+      its tracked life.
+
+      Month-end state comes from the last observation IN the month, not the
+      calendar month end, so an in-progress month reports the last thing
+      actually seen rather than a null.
+    columns:
+      - name: github_repo_id
+        description: Stable GitHub numeric id.
+        data_tests: [not_null]
+      - name: timeline_month
+        description: First of the month.
+        data_tests: [not_null]
+      - name: days_observed
+        description: Observations collected for this repo in the month.
+        data_tests: [not_null]
+      - name: missing_observation_days
+        description: Days in the month with no observation for this repo.
+        data_tests: [not_null]
+      - name: stars_at_month_end
+        description: Stars at the last observation of the month.
+      - name: is_stale_at_month_end
+        description: Whether the repo read as stale at the last observation of the month.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [github_repo_id, timeline_month]
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "material_events <= change_events"

@@ -1,0 +1,132 @@
+version: 2
+
+models:
+  - name: fct_change_events
+    description: >
+      Grain: one row per detected change event.
+      The core fact table. The digest and every aggregate read from here.
+      Calendar buckets are defined once in this model so week and month
+      boundaries cannot drift between aggregates.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: change_key
+        data_type: text
+        description: Surrogate key for the event.
+        constraints: [{type: not_null}]
+        data_tests: [unique]
+      - name: github_repo_id
+        data_type: bigint
+        description: Stable GitHub numeric id, safe across renames.
+        constraints: [{type: not_null}]
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_repos')
+                field: github_repo_id
+      - name: repo_full_name
+        data_type: text
+        description: Repo path as configured in repos.yml.
+        constraints: [{type: not_null}]
+      - name: category
+        data_type: text
+        description: Tracking category.
+      - name: priority
+        data_type: text
+        description: Tracking priority, which drives the ranking promotion.
+      - name: detected_at
+        data_type: date
+        description: Date the change was detected. Up to one collection interval after it happened.
+        constraints: [{type: not_null}]
+      - name: detected_week
+        data_type: date
+        description: Monday of the ISO week the change was detected in. The digest groups on this.
+        constraints: [{type: not_null}]
+      - name: detected_month
+        data_type: date
+        description: First of the month the change was detected in.
+        constraints: [{type: not_null}]
+      - name: detected_iso_year
+        data_type: integer
+        description: ISO year, paired with detected_iso_week for YYYY-WW digest filenames.
+      - name: detected_iso_week
+        data_type: integer
+        description: ISO week number.
+      - name: change_type
+        data_type: text
+        description: Normalised change type across all detectors.
+        constraints: [{type: not_null}]
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - renamed_or_transferred
+                  - license_changed
+                  - default_branch_changed
+                  - description_changed
+                  - homepage_changed
+                  - topics_changed
+                  - tracking_category_changed
+                  - tracking_priority_changed
+                  - archived
+                  - unarchived
+                  - major_release
+                  - minor_release
+                  - patch_release
+                  - breaking_release
+                  - release_unclassified
+                  - went_stale
+                  - star_spike
+      - name: source_model
+        data_type: text
+        description: Which detector produced the row.
+        constraints: [{type: not_null}]
+      - name: before_value
+        data_type: text
+        description: Value before the change. NULL is meaningful - the attribute was absent.
+      - name: after_value
+        data_type: text
+        description: Value after the change.
+      - name: evidence
+        data_type: text
+        description: >
+          JSON the reader can verify without opening GitHub. Non-negotiable per
+          DESIGN.md section 6 - enforced as a not_null constraint at the
+          database level, not merely tested.
+        constraints: [{type: not_null}]
+      - name: base_materiality
+        data_type: text
+        description: Materiality from change type alone.
+        constraints: [{type: not_null}]
+      - name: materiality
+        data_type: text
+        description: Final materiality after priority and abandonment adjustment.
+        constraints: [{type: not_null}]
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [critical, high, medium, low]
+      - name: materiality_score
+        data_type: integer
+        description: Numeric 1-4 materiality, clamped. Orders the digest.
+        constraints: [{type: not_null}]
+      - name: priority_adjustment
+        data_type: integer
+        description: +1 where the repo is marked priority high.
+      - name: abandonment_adjustment
+        data_type: integer
+        description: -1 where the repo has had no commits in a year.
+      - name: days_since_push
+        data_type: integer
+        description: Days since last push at detection time. NULL where no activity row exists for that date.
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "length(evidence) > 2"
+      # No event may predate the repo's first observation. A violation means a
+      # window function is mispartitioned and events are being attributed to
+      # the wrong repo or the wrong day.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "detected_at >= (select min(observed_date) from {{ ref('stg_repo_observations') }})"

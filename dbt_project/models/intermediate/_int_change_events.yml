@@ -1,0 +1,190 @@
+version: 2
+
+models:
+  - name: int_change_events
+    description: >
+      Grain: one row per detected change event.
+      The union. Every detector normalised to one shape and ranked, so that
+      fct_change_events and the digest never need to know which model produced
+      a row.
+
+      Activity events (star_spike, went_stale) are derived here as TRANSITIONS
+      rather than taken as standing states. int_activity_signals says "this
+      repo is stale today", which is true again tomorrow; what is newsworthy is
+      the moment it became true.
+
+      Ranking comes from macros/materiality.sql: base materiality by change
+      type, +1 for a repo marked priority high, -1 for a repo with no commits
+      in a year, clamped to the four defined levels.
+    columns:
+      - name: change_key
+        description: Surrogate key for the event.
+        data_tests: [not_null, unique]
+      - name: github_repo_id
+        description: Stable GitHub numeric id.
+        data_tests: [not_null]
+      - name: repo_full_name
+        description: Repo path as configured in repos.yml.
+        data_tests: [not_null]
+      - name: detected_at
+        description: Date the change was detected, which may be up to one collection interval after it happened.
+        data_tests: [not_null]
+      - name: change_type
+        description: Normalised change type across all detectors.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - renamed_or_transferred
+                  - license_changed
+                  - default_branch_changed
+                  - description_changed
+                  - homepage_changed
+                  - topics_changed
+                  - tracking_category_changed
+                  - tracking_priority_changed
+                  - archived
+                  - unarchived
+                  - major_release
+                  - minor_release
+                  - patch_release
+                  - breaking_release
+                  - release_unclassified
+                  - went_stale
+                  - star_spike
+      - name: source_model
+        description: Which detector produced the row. Kept for debugging and for the docs lineage story.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [int_metadata_changes, int_release_events, int_activity_signals]
+      - name: base_materiality
+        description: Materiality from the change type alone, before adjustment.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [critical, high, medium, low]
+      - name: materiality
+        description: Final ranked materiality after priority and abandonment adjustment.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [critical, high, medium, low]
+      - name: materiality_score
+        description: Numeric 1-4 form of materiality, clamped. Used for ordering the digest.
+        data_tests: [not_null]
+      - name: evidence
+        description: >
+          JSON a reader can check without opening GitHub. DESIGN.md section 6
+          makes this non-negotiable for every single row, so it is tested here
+          as well as in each detector.
+        data_tests: [not_null]
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "materiality_score between 1 and 4"
+      # Evidence must be substantive, not an empty object. A row that carries
+      # "{}" passes not_null and is still unverifiable.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "length(evidence) > 2"
+
+unit_tests:
+  - name: high_priority_repo_is_promoted
+    model: int_change_events
+    description: >
+      A patch release on a high-priority repo outranks the same release on a
+      normal one. This is the adjustment that makes the digest reflect what the
+      reader actually cares about rather than treating all repos alike.
+    given:
+      - input: ref('int_metadata_changes')
+        rows: []
+      - input: ref('int_activity_signals')
+        rows: []
+      - input: ref('int_release_events')
+        rows:
+          - {change_key: "a", github_repo_id: 1, repo_full_name: "o/hi", category: "c", priority: "high", detected_at: "2026-01-02", change_type: "patch_release", base_materiality: "low", before_value: "v1.0.0", after_value: "v1.0.1", evidence: "{\"k\":1}"}
+          - {change_key: "b", github_repo_id: 2, repo_full_name: "o/norm", category: "c", priority: "normal", detected_at: "2026-01-02", change_type: "patch_release", base_materiality: "low", before_value: "v1.0.0", after_value: "v1.0.1", evidence: "{\"k\":1}"}
+    expect:
+      rows:
+        - {change_key: "a", materiality: "medium", materiality_score: 2, priority_adjustment: 1}
+        - {change_key: "b", materiality: "low", materiality_score: 1, priority_adjustment: 0}
+
+  - name: promotion_cannot_overflow_past_critical
+    model: int_change_events
+    description: >
+      A critical change on a high-priority repo stays critical. Without the
+      clamp the score becomes 5 and maps to no defined level, which would fail
+      the accepted_values test on a genuinely important event.
+    given:
+      - input: ref('int_release_events')
+        rows: []
+      - input: ref('int_activity_signals')
+        rows: []
+      - input: ref('int_metadata_changes')
+        rows:
+          - {change_key: "a", github_repo_id: 1, repo_full_name: "o/r", category: "c", priority: "high", detected_at: "2026-01-02", change_type: "archived", base_materiality: "critical", before_value: "false", after_value: "true", evidence: "{\"k\":1}"}
+    expect:
+      rows:
+        - {change_key: "a", materiality: "critical", materiality_score: 4}
+
+  - name: abandoned_repo_news_is_demoted
+    model: int_change_events
+    description: >
+      A release from a repo with no commits in over a year is worth less than
+      the same release from a live one. The join to int_activity_signals is
+      what supplies days_since_push.
+    given:
+      - input: ref('int_metadata_changes')
+        rows: []
+      - input: ref('int_release_events')
+        rows:
+          - {change_key: "a", github_repo_id: 1, repo_full_name: "o/dead", category: "c", priority: "normal", detected_at: "2026-01-02", change_type: "minor_release", base_materiality: "medium", before_value: "v1.0.0", after_value: "v1.1.0", evidence: "{\"k\":1}"}
+      - input: ref('int_activity_signals')
+        rows:
+          - {github_repo_id: 1, repo_full_name: "o/dead", category: "c", priority: "normal", observed_date: "2026-01-02", stars: 10, is_stale: true, is_star_spike: false, days_since_push: 400, stars_per_day_recent: null, stars_per_day_baseline: null, days_of_history: 400}
+    expect:
+      rows:
+        - {change_key: "a", materiality: "low", materiality_score: 1, abandonment_adjustment: -1}
+
+  - name: already_stale_repo_is_not_reported_as_newly_stale
+    model: int_change_events
+    description: >
+      A repo that was already stale on its first observation must produce no
+      went_stale event. The lag is NULL there, and treating NULL as false would
+      make the first digest announce that every long-dormant repo had just
+      died.
+    given:
+      - input: ref('int_metadata_changes')
+        rows: []
+      - input: ref('int_release_events')
+        rows: []
+      - input: ref('int_activity_signals')
+        rows:
+          - {github_repo_id: 1, repo_full_name: "o/r", category: "c", priority: "normal", observed_date: "2026-01-01", stars: 10, is_stale: true, is_star_spike: false, days_since_push: 300, stars_per_day_recent: null, stars_per_day_baseline: null, days_of_history: 1}
+          - {github_repo_id: 1, repo_full_name: "o/r", category: "c", priority: "normal", observed_date: "2026-01-02", stars: 10, is_stale: true, is_star_spike: false, days_since_push: 301, stars_per_day_recent: null, stars_per_day_baseline: null, days_of_history: 2}
+    expect:
+      rows: []
+
+  - name: crossing_the_staleness_threshold_emits_one_event
+    model: int_change_events
+    description: >
+      A repo that was active and becomes stale emits exactly one event, on the
+      day it crossed, and not again on subsequent days while it stays stale.
+    given:
+      - input: ref('int_metadata_changes')
+        rows: []
+      - input: ref('int_release_events')
+        rows: []
+      - input: ref('int_activity_signals')
+        rows:
+          - {github_repo_id: 1, repo_full_name: "o/r", category: "c", priority: "normal", observed_date: "2026-01-01", stars: 10, is_stale: false, is_star_spike: false, days_since_push: 179, stars_per_day_recent: null, stars_per_day_baseline: null, days_of_history: 1}
+          - {github_repo_id: 1, repo_full_name: "o/r", category: "c", priority: "normal", observed_date: "2026-01-02", stars: 10, is_stale: true, is_star_spike: false, days_since_push: 180, stars_per_day_recent: null, stars_per_day_baseline: null, days_of_history: 2}
+          - {github_repo_id: 1, repo_full_name: "o/r", category: "c", priority: "normal", observed_date: "2026-01-03", stars: 10, is_stale: true, is_star_spike: false, days_since_push: 181, stars_per_day_recent: null, stars_per_day_baseline: null, days_of_history: 3}
+    expect:
+      rows:
+        - {github_repo_id: 1, detected_at: "2026-01-02", change_type: "went_stale", materiality: "medium", before_value: "active", after_value: "stale"}
