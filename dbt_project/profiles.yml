@@ -18,8 +18,10 @@ radar:
     dev:
       type: postgres
       host: localhost
-      # 5433 on the host, not 5432 - see the port note in docker-compose.yml.
-      port: 5433
+      # Must match the host port docker-compose publishes. Both read
+      # RADAR_PG_PORT from .env with the same 5433 default, so changing the
+      # port in one place is enough. See the port note in docker-compose.yml.
+      port: "{{ env_var('RADAR_PG_PORT', '5433') | int }}"
       user: radar
       password: radar
       dbname: warehouse

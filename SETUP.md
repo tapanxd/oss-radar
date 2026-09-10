@@ -38,7 +38,9 @@ EOF
 Settings → Developer settings → Personal access tokens → **Fine-grained tokens**.
 
 - Repository access: **Public repositories (read-only)**
-- Expiration: 90 days or longer — an expired token silently kills collection
+- Expiration: none. A token that expires silently kills collection, and the
+  gap in history cannot be backfilled. If you do set an expiry, calendar a
+  reminder a week out.
 - No account permissions needed
 
 Copy it now; you can't view it again.
@@ -124,89 +126,102 @@ Not urgent. Start when you're ready for Phase 1.
 
 ## B1. Prerequisites
 
-- Docker Desktop with **6GB+ allocated to the VM**. The default 2GB on macOS kills Airflow containers silently — this is the most common first-day failure.
-- Python 3.11
-- `make`, `git`
+- Docker Desktop with **6GB+ available to the VM**. Check with
+  `docker info --format '{{.MemTotal}}'` and divide by 1024^3.
+  - On macOS/Hyper-V there is a Resources → Memory slider defaulting to 2GB,
+    which kills Airflow containers silently. Raise it.
+  - On Windows/WSL2 there is no slider: WSL2 takes 50% of host RAM by default,
+    which clears the bar on a 16GB machine without doing anything. To cap it,
+    create `%USERPROFILE%\.wslconfig` with `[wsl2]` / `memory=8GB`, then
+    `wsl --shutdown`. Note this applies to every WSL distro, not just Docker.
+  - The **Docker Engine** settings page edits `daemon.json` and has nothing to
+    do with memory; its `defaultKeepStorage` is build-cache disk.
+- Python 3.13 (what the collector and dbt are running on here)
+- `make`, `git`. On Windows: `choco install make`.
 
 ## B2. Local Postgres
 
-Two databases in one container. `airflow` for Airflow's metadata, `warehouse` for dbt. **Never point dbt at the metadata DB.**
+Everything is in `docker-compose.yml` and driven by the `Makefile`:
 
-`docker-compose.yml`:
-
-```yaml
-services:
-  postgres:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: radar
-      POSTGRES_PASSWORD: radar
-      POSTGRES_DB: warehouse
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./init:/docker-entrypoint-initdb.d
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "radar"]
-      interval: 5s
-      retries: 10
-
-volumes:
-  pgdata:
+```bash
+make up      # starts Postgres, waits for the healthcheck
 ```
 
-`init/01-airflow-db.sql`:
+Two databases in one container. `airflow` for Airflow's metadata, `warehouse`
+for dbt. **Never point dbt at the metadata DB.**
 
-```sql
-create database airflow;
-```
+Three things differ from what an older version of this doc said, each for a
+reason worth knowing:
+
+**The image is `postgres:18`, not `postgres:16`.** Neon production runs 18.6.
+`pg_dump` refuses to dump a server whose major version is newer than its own,
+so a pg16 client cannot seed from Neon at all. The major tag (`18`, not
+`18.6`) keeps picking up patch releases, and any 18.x can dump any other 18.x.
+The only thing that breaks this is Neon moving to a new major -
+`scripts/seed_dev.sh` preflights exactly that and tells you which tag to bump
+to.
+
+**postgres:18 moved its data directory.** It stores data under a
+major-version subdirectory so `pg_upgrade --link` works without crossing a
+mount boundary, so the volume mounts at `/var/lib/postgresql`, not
+`/var/lib/postgresql/data`. Mounting at the old path makes the container
+crash-loop with a confusing "unused mount/volume" error.
+
+**The host port is 5433, not 5432,** so a native Postgres install does not
+collide. It comes from `RADAR_PG_PORT` in `.env`; `docker-compose.yml` and
+dbt's `profiles.yml` both read it with the same default, so changing it in
+`.env` is enough. Inside the compose network the port is always 5432.
 
 ## B3. Seed dev from production
 
 Develop against real data, not an empty schema:
 
 ```bash
-pg_dump "$NEON_URL" --schema=raw --no-owner --no-privileges \
-  | psql "postgresql://radar:radar@localhost:5432/warehouse"
+make seed
 ```
 
-Re-run whenever you want fresher data. Neon's branching feature can do this more elegantly later — worth using for CI.
+No Postgres client tools are needed on Windows: `pg_dump` runs inside the
+container, which also guarantees the client version matches the server. The
+dump is streamed rather than written to a file, because Git Bash rewrites a
+container path like `/tmp/x.sql` into a Windows path and `pg_dump` then fails
+on a path that does not exist in the container.
+
+The script is safe to re-run. It drops the local `raw` schema with CASCADE
+before restoring, so it works even after dbt has built views on top of `raw` -
+a plain `pg_dump --clean` fails there with "cannot drop table ... because
+other objects depend on it". Anything CASCADE drops is rebuilt by `make build`,
+and the script tells you when that is needed.
+
+It is **read-only against Neon** and never writes to production.
+
+Neon's branching feature can do this more elegantly later - worth using for CI.
 
 ## B4. dbt
 
+Already installed into `.venv` and configured. Verify with:
+
 ```bash
-pip install dbt-core dbt-postgres
-dbt init radar          # choose postgres
+make debug     # both connection targets
+make build     # run and test every model
+make fresh     # source freshness against the collector's output
 ```
 
-`~/.dbt/profiles.yml`:
+`profiles.yml` lives in `dbt_project/`, **not** `~/.dbt/`. dbt resolves
+profiles from `--profiles-dir`, then `DBT_PROFILES_DIR`, then the working
+directory, then `~/.dbt/`. Keeping it in the repo means a reviewer can clone,
+`make up && make seed`, and run dbt with no hidden machine-local setup - worth
+more here than following the `~/.dbt` convention.
 
-```yaml
-radar:
-  target: dev
-  outputs:
-    dev:
-      type: postgres
-      host: localhost
-      port: 5432
-      user: radar
-      password: radar
-      dbname: warehouse
-      schema: dbt_tapan        # your own schema — this is the convention
-      threads: 4
-    prod:
-      type: postgres
-      host: "{{ env_var('NEON_HOST') }}"
-      user: "{{ env_var('NEON_USER') }}"
-      password: "{{ env_var('NEON_PASSWORD') }}"
-      dbname: "{{ env_var('NEON_DB') }}"
-      schema: analytics
-      threads: 4
-      sslmode: require
-```
+No secrets are in it. The `dev` credentials are the throwaway ones from
+`docker-compose.yml`; `prod` reads the Neon connection from `NEON_*`
+environment variables supplied by `.env` or CI secrets.
 
-Verify with `dbt debug` before writing a single model.
+**`.env` values must be quoted** (`KEY="value"`). `DATABASE_URL` contains an
+`&`, and an unquoted value makes `source` background the assignment and
+silently lose the variable.
+
+`make reset` rebuilds the whole dev environment from nothing: wipe the volume,
+start Postgres, reseed from Neon, build and test every model.
 
 ## B5. Airflow
 
@@ -236,8 +251,11 @@ Install dbt into the Airflow image so `BashOperator` can call it directly. A sep
 
 **Part B**, when you get there:
 
-- [ ] Two separate databases, dbt pointed at `warehouse`
-- [ ] `dbt debug` passes
+- [x] Two separate databases, dbt pointed at `warehouse`
+- [x] `make debug` passes on both dev and prod targets
+- [x] `make seed` reloads from Neon and is safe to re-run
+- [x] `make build` green
+- [x] `make reset` rebuilds the whole environment from an empty volume
 - [ ] Airflow UI reachable, LocalExecutor, metadata DB separate
 
 ---
@@ -246,8 +264,8 @@ Install dbt into the Airflow image so `BashOperator` can call it directly. A sep
 
 **Actions disables scheduled workflows after ~60 days of repo inactivity.** You'll be committing while building so it's unlikely — but if you pause, the cron dies *silently* and history gets a permanent hole. Check the Actions tab whenever you return after a break.
 
-**Neon scales compute to zero when idle.** The first connection after a quiet period takes a few seconds. `connect_timeout` is set to 30 in `collect.py` for this reason — don't lower it.
+**Neon scales compute to zero when idle.** The first connection after a quiet period takes a few seconds. `connect_timeout` is set to 30 in `collect.py` and in `profiles.yml`'s prod target for this reason — don't lower it.
 
-**Token expiry kills collection silently.** Calendar a reminder for a week before expiry.
+**`make include` and `.env` quoting pull in opposite directions.** Make's `include` does not strip quotes, so `RADAR_PG_PORT="5433"` reaches docker compose as six characters and it rejects the port. The quotes cannot be dropped either, because `DATABASE_URL` contains an `&`. The Makefile therefore sources `.env` through bash per-recipe instead of including it.
 
 **GitHub's secondary rate limits are separate from the 5,000/hour budget.** You can have 4,000 remaining and still get throttled for firing too fast. The collector handles this; remember it when you migrate to mapped Airflow tasks and are tempted to raise concurrency.

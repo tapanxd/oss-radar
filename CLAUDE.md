@@ -29,7 +29,9 @@ the conflict.
   `raw.collection_runs`). It has been running since 2026-09-09 and
   must not be interrupted — the whole project depends on uninterrupted daily
   history that cannot be backfilled.
-- **Phase 1 (dbt warehouse) — NOT STARTED.** This is the current work.
+- **Phase 1 (dbt warehouse) — IN PROGRESS.** Dev environment and staging layer
+  are built and green (`make reset` rebuilds everything from an empty volume).
+  Next: `int_repo_state_history`, the SCD2 spine.
 - **Phase 2 (Airflow) — NOT STARTED.**
 - **Phase 3 (polish/README) — NOT STARTED.**
 
@@ -44,7 +46,7 @@ from raw.repo_observations;
 
 ## Stack (locked — do not substitute without discussion)
 
-dbt Core · Apache Airflow · Docker · PostgreSQL · Neon
+dbt Core 1.12 · Apache Airflow · Docker · PostgreSQL 18 · Neon
 
 - **Two Postgres instances.** Neon = production, holds the observation
   history, collector writes here, never point destructive dbt runs at it
@@ -53,7 +55,16 @@ dbt Core · Apache Airflow · Docker · PostgreSQL · Neon
   never the same database.**
 - **LocalExecutor for Airflow**, not the default Celery/Redis setup in the
   official docker-compose — strip those services out.
-- **dbt version 1.8+** (needed for unit tests / `contract: enforced`).
+- **dbt version 1.8+** (needed for unit tests / `contract: enforced`). Running
+  dbt-core 1.12.4 / dbt-postgres 1.11.0 on Python 3.13. Note 1.12 wants generic
+  test args nested under an `arguments:` key; the old flat form still works but
+  emits a deprecation.
+- **Local Postgres is `postgres:18`, matching Neon (18.6).** Not the
+  `postgres:16` older docs mention — `pg_dump` cannot dump a server newer than
+  itself, so pg16 cannot seed from Neon at all. `scripts/seed_dev.sh`
+  preflights this and says which tag to bump to if Neon changes major.
+- **Host port is `RADAR_PG_PORT` (default 5433)**, read by both
+  `docker-compose.yml` and `profiles.yml`. Change it in `.env` only.
 - Install dbt into the Airflow image so `BashOperator` can call it directly.
   Don't stand up a separate dbt container.
 
@@ -118,7 +129,12 @@ collector/          Phase 0 — built, don't touch casually
 .github/workflows/
   collect.yml       daily cron — built
   ci.yml            Slim CI — TO BUILD in Phase 1
-dbt_project/         TO BUILD
+Makefile             every workflow: up/seed/build/reset. `make help` lists them
+docker-compose.yml   dev Postgres: `warehouse` + `airflow` databases
+init/                first-boot SQL for the dev container
+scripts/seed_dev.sh  reload dev warehouse from Neon; read-only against prod
+dbt_project/         staging built; intermediate + marts TO BUILD
+  profiles.yml       in-repo, not ~/.dbt, so a clone runs with no local setup
 dags/                TO BUILD in Phase 2
 digests/             weekly digests land here — commit them, don't gitignore
 DESIGN.md            source of truth
@@ -141,7 +157,20 @@ DESIGN.md            source of truth
   the pinned version before writing asset-triggered DAG code.
 - We're on `psycopg` v3 (`psycopg[binary]`), not `psycopg2` — the
   collector's Python is 3.13 and `psycopg2-binary` doesn't reliably have
-  wheels for it. Don't reintroduce `psycopg2` imports.
+  wheels for it. Don't reintroduce `psycopg2` imports. (dbt-postgres pulls its
+  own `psycopg2-binary`; that's dbt's internal driver, not our code, and is
+  not a violation of this rule.)
+- `.env` values must be QUOTED. `DATABASE_URL` contains an `&`; unquoted, a
+  shell `source` backgrounds the assignment and silently loses the variable.
+- Don't `include .env` in the Makefile — Make doesn't strip the quotes and
+  docker compose then rejects `RADAR_PG_PORT` as `"5433"`. Recipes source it
+  through bash instead.
+- Git Bash rewrites container paths (`/tmp/x.sql` -> `C:/Users/.../tmp/x.sql`).
+  Anything passing a container-side path to `docker exec` needs
+  `MSYS_NO_PATHCONV=1` or, better, no absolute path at all.
+- Re-seeding fails once dbt has built views on `raw` unless the schema is
+  dropped CASCADE — `pg_dump --clean` emits a plain DROP that errors on
+  dependents.
 
 ---
 

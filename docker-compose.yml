@@ -1,9 +1,18 @@
 # Local development stack for oss-radar.
 #
-# postgres:18 matches Neon production (18.6), NOT the postgres:16 in SETUP.md.
-# This is deliberate: pg_dump refuses to dump a server newer than itself, so a
-# pg16 client cannot seed from Neon at all. Matching the major version also
-# removes a class of dev/prod drift. If Neon upgrades its major, bump this.
+# VERSION: pinned to the postgres:18 MAJOR tag, matching Neon production
+# (currently 18.6). NOT the postgres:16 in SETUP.md - pg_dump refuses to dump a
+# server newer than itself, so a pg16 client cannot seed from Neon at all.
+#
+# Tracking the major tag (18, not 18.6) keeps picking up patch releases, which
+# is what you want, and any 18.x can dump any other 18.x. The only thing that
+# breaks this is Neon moving to a NEW MAJOR - and scripts/seed_dev.sh preflights
+# exactly that, failing with an actionable message rather than a cryptic
+# pg_dump error. Bump this tag when it tells you to.
+#
+# PORT: the host port comes from RADAR_PG_PORT (default 5433), so a native
+# Postgres already holding 5432, or a second project, does not collide. Set it
+# in .env and docker-compose, profiles.yml and the Makefile all follow.
 #
 # TWO DATABASES IN ONE CONTAINER, DELIBERATELY:
 #   warehouse  -> dbt builds here (dev target). Seeded from a Neon dump.
@@ -24,16 +33,15 @@ services:
       POSTGRES_PASSWORD: radar
       POSTGRES_DB: warehouse
     ports:
-      # Host 5433, not 5432. If a native Postgres is ever installed on Windows
-      # it grabs 5432 and the collision is confusing to diagnose. Inside the
-      # compose network the port is still 5432.
-      - "5433:5432"
+      # Inside the compose network the port is always 5432 regardless of what
+      # the host maps it to.
+      - "${RADAR_PG_PORT:-5433}:5432"
     volumes:
       # postgres:18+ stores data in a major-version subdirectory
       # (/var/lib/postgresql/18/docker) so that pg_upgrade --link works without
       # crossing a mount boundary. The mount therefore goes at the PARENT dir.
-      # Mounting at /var/lib/postgresql/data — correct for pg16 and what
-      # SETUP.md says — makes the container refuse to start on 18.
+      # Mounting at /var/lib/postgresql/data - correct for pg16, and what
+      # SETUP.md says - makes the container refuse to start on 18.
       - pgdata:/var/lib/postgresql
       # Runs ONLY on first init of an empty data dir. Changing these files later
       # does nothing until `docker compose down -v` wipes the volume.
