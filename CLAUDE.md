@@ -29,15 +29,15 @@ the conflict.
   `raw.collection_runs`). It has been running since 2026-09-09 and
   must not be interrupted — the whole project depends on uninterrupted daily
   history that cannot be backfilled.
-- **Phase 1 (dbt warehouse) — MODELLING AND CI COMPLETE, NOT YET PROVEN IN
-  ANGER.** All 13 models built: staging, the five intermediate detectors, the
-  union, and five marts. 172 dbt tests + 13 pytest tests pass. sqlfluff clean.
-  `make ci` runs the whole CI sequence locally; `make reset` rebuilds from an
-  empty volume.
-
-  Slim CI is written and its selection is verified (touching one model selects
-  7 of 13 and defers the rest), but **it has never actually run on GitHub** —
-  see "What is not done yet" below.
+- **Phase 1 (dbt warehouse) — COMPLETE.** All 13 models built: staging, the
+  five intermediate detectors, the union, and five marts. 172 dbt tests + 13
+  pytest tests pass. sqlfluff clean. `make ci` runs the whole CI sequence
+  locally; `make reset` rebuilds from an empty volume.
+- **CI is green and production exists on Neon.** `analytics_staging`,
+  `analytics_intermediate`, `analytics_marts` and `analytics_seeds` are built
+  and match dev exactly. The `prod-manifest` artifact is published on every
+  push to `main`, so Slim CI has something to defer against. Slim selection is
+  verified: touching one model selects 7 of 13 and defers the other 6.
 - **Phase 2 (Airflow) — NOT STARTED.**
 - **Phase 3 (polish/README) — NOT STARTED.**
 
@@ -50,15 +50,27 @@ from raw.repo_observations;
 
 ### What is not done yet
 
-- **Neon has no `analytics` schema.** dbt has never been run against prod. The
-  first push to `main` triggers `prod-build`, which creates it and publishes
-  the manifest that Slim CI defers against. Until then a PR falls back to a
-  full build, which the workflow handles deliberately rather than failing.
-- **CI has never run.** `.github/workflows/ci.yml` is committed but unproven.
+- **Slim CI's deferral path has never executed** — no PR has been opened yet.
+  Only the full-build fallback and the prod build have actually run.
 - **No digest has been rendered.** `agg_weekly_digest` produces the rows;
   nothing writes `digests/YYYY-WW.md` yet. That is Phase 2's
   `render_markdown` task.
-- Phase 2 (Airflow) and Phase 3 (README, dashboard) not started.
+- **There is no README.** DESIGN.md §11 wants it to open by addressing "why
+  not just GitHub notifications" and to document the snapshots-vs-derived-SCD2
+  decision.
+- Phase 2 (Airflow) and Phase 3 (dashboard) not started.
+
+### Security note
+
+The Neon password was briefly exposed in a public Actions log on 2026-09-10:
+CI derived `NEON_*` from the `DATABASE_URL` secret and wrote them to
+`$GITHUB_ENV`, and GitHub echoes env vars in a step's log header. GitHub masks
+`secrets.*` automatically but NOT values derived from them. The run was
+deleted and `::add-mask::` is now applied before anything is written to
+`$GITHUB_ENV`. **Rotate the Neon password if it has not been rotated** — a
+deleted log is not proof nobody read it.
+
+Anything that derives a value from a secret must `::add-mask::` it first.
 
 ### Data reality check
 
