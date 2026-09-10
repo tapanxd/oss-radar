@@ -49,8 +49,15 @@ capitalisation_policy = lower
 [sqlfluff:rules:capitalisation.types]
 extended_capitalisation_policy = lower
 
+# Paths are relative to the REPO ROOT, so sqlfluff must be invoked from there
+# (`make lint` and CI both do). Running it from inside dbt_project makes these
+# resolve to dbt_project/dbt_project.
 [sqlfluff:templater:dbt]
 project_dir = dbt_project
 profiles_dir = dbt_project
 profile = radar
-target = dev
+# `ci` rather than `dev`: linting only needs the project to COMPILE, and dev
+# points at a localhost Postgres that does not exist on a CI runner. The ci
+# target reads NEON_* from the environment and falls back to placeholder
+# values, which is enough for compilation.
+target = ci

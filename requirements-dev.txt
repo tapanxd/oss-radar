@@ -1,0 +1,18 @@
+# Development and CI toolchain, pinned.
+#
+# Pinned rather than floating so a CI run and a local `make ci` are testing the
+# same thing. sqlfluff in particular changes which rules fire between minor
+# versions, so an unpinned upgrade turns a green branch red with no code change.
+#
+# sqlfluff-templater-dbt must match the sqlfluff version exactly, and without it
+# sqlfluff cannot resolve ref() and fails with "Requested templater 'dbt' which
+# is not currently available".
+#
+# Runtime collector dependencies live in collector/requirements.txt.
+
+dbt-core==1.12.4
+dbt-postgres==1.11.0
+sqlfluff==4.3.0
+sqlfluff-templater-dbt==4.3.0
+pytest==9.1.1
+psycopg[binary]==3.2.3

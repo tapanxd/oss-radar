@@ -63,7 +63,7 @@ jobs:
       - name: Install
         run: |
           pip install -r collector/requirements.txt
-          pip install dbt-postgres pytest sqlfluff
+          pip install -r requirements-dev.txt
 
       - name: Collector tests
         # The database-backed idempotency tests skip themselves when no local
@@ -116,8 +116,15 @@ jobs:
           DBT_CI_SCHEMA: parse_only
 
       - name: sqlfluff lint
-        working-directory: dbt_project
-        run: sqlfluff lint models --processes 2
+        # Run from the repo root, NOT from dbt_project: .sqlfluff declares
+        # project_dir and profiles_dir relative to the root, and running from
+        # inside dbt_project makes them resolve to dbt_project/dbt_project.
+        # This also matches how `make lint` invokes it locally.
+        run: sqlfluff lint dbt_project/models --processes 2
+        env:
+          # The dbt templater compiles the project to resolve ref(), so it
+          # needs a target that exists in CI. `dev` points at localhost.
+          DBT_CI_SCHEMA: lint_only
 
   # ------------------------------------------------------------------
   # Slim CI. Pull requests only.
@@ -138,9 +145,7 @@ jobs:
           cache: pip
 
       - name: Install
-        # psycopg v3 is for the cleanup step at the end. dbt-postgres brings
-        # psycopg2, which this repo does not import anywhere itself.
-        run: pip install dbt-postgres "psycopg[binary]"
+        run: pip install -r requirements-dev.txt
 
       - name: dbt deps
         working-directory: dbt_project
@@ -281,7 +286,7 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install dbt-postgres
+        run: pip install -r requirements-dev.txt
 
       - name: dbt deps
         working-directory: dbt_project
