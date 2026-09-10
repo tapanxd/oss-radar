@@ -34,7 +34,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DBT_PROFILES_DIR: dbt_project
+  # Absolute, because the dbt steps run with working-directory: dbt_project.
+  # A relative "dbt_project" resolves against that and becomes
+  # dbt_project/dbt_project, which does not exist.
+  DBT_PROFILES_DIR: ${{ github.workspace }}/dbt_project
 
 # Connection details are parsed out of the DATABASE_URL secret the collector
 # workflow already uses, rather than asking for five more secrets that can
@@ -76,16 +79,32 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          python - <<'PY' >> "$GITHUB_ENV"
+          # ::add-mask:: MUST come before anything is written to $GITHUB_ENV.
+          #
+          # GitHub masks the values of `secrets.*` automatically, but NOT values
+          # derived from them. Every env var is echoed in a step's expanded log
+          # header, so writing an unmasked password to $GITHUB_ENV publishes it
+          # in the run log - permanently, and publicly on a public repo.
+          # Registering each value as a mask first makes GitHub redact it
+          # everywhere in the log, including in that header.
+          python - <<'PY' > /tmp/neon.env
           import os
           from urllib.parse import urlparse, unquote
           u = urlparse(os.environ["DATABASE_URL"])
-          print(f"NEON_HOST={u.hostname}")
-          print(f"NEON_PORT={u.port or 5432}")
-          print(f"NEON_USER={unquote(u.username or '')}")
-          print(f"NEON_PASSWORD={unquote(u.password or '')}")
-          print(f"NEON_DB={u.path.lstrip('/')}")
+          for key, value in (
+              ("NEON_HOST", u.hostname),
+              ("NEON_PORT", u.port or 5432),
+              ("NEON_USER", unquote(u.username or "")),
+              ("NEON_PASSWORD", unquote(u.password or "")),
+              ("NEON_DB", u.path.lstrip("/")),
+          ):
+              print(f"{key}={value}")
           PY
+          while IFS='=' read -r key value; do
+            echo "::add-mask::$value"
+          done < /tmp/neon.env
+          cat /tmp/neon.env >> "$GITHUB_ENV"
+          rm -f /tmp/neon.env
 
       - name: dbt parse
         working-directory: dbt_project
@@ -131,16 +150,32 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          python - <<'PY' >> "$GITHUB_ENV"
+          # ::add-mask:: MUST come before anything is written to $GITHUB_ENV.
+          #
+          # GitHub masks the values of `secrets.*` automatically, but NOT values
+          # derived from them. Every env var is echoed in a step's expanded log
+          # header, so writing an unmasked password to $GITHUB_ENV publishes it
+          # in the run log - permanently, and publicly on a public repo.
+          # Registering each value as a mask first makes GitHub redact it
+          # everywhere in the log, including in that header.
+          python - <<'PY' > /tmp/neon.env
           import os
           from urllib.parse import urlparse, unquote
           u = urlparse(os.environ["DATABASE_URL"])
-          print(f"NEON_HOST={u.hostname}")
-          print(f"NEON_PORT={u.port or 5432}")
-          print(f"NEON_USER={unquote(u.username or '')}")
-          print(f"NEON_PASSWORD={unquote(u.password or '')}")
-          print(f"NEON_DB={u.path.lstrip('/')}")
+          for key, value in (
+              ("NEON_HOST", u.hostname),
+              ("NEON_PORT", u.port or 5432),
+              ("NEON_USER", unquote(u.username or "")),
+              ("NEON_PASSWORD", unquote(u.password or "")),
+              ("NEON_DB", u.path.lstrip("/")),
+          ):
+              print(f"{key}={value}")
           PY
+          while IFS='=' read -r key value; do
+            echo "::add-mask::$value"
+          done < /tmp/neon.env
+          cat /tmp/neon.env >> "$GITHUB_ENV"
+          rm -f /tmp/neon.env
 
       - name: Fetch production manifest
         id: manifest
@@ -256,16 +291,32 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          python - <<'PY' >> "$GITHUB_ENV"
+          # ::add-mask:: MUST come before anything is written to $GITHUB_ENV.
+          #
+          # GitHub masks the values of `secrets.*` automatically, but NOT values
+          # derived from them. Every env var is echoed in a step's expanded log
+          # header, so writing an unmasked password to $GITHUB_ENV publishes it
+          # in the run log - permanently, and publicly on a public repo.
+          # Registering each value as a mask first makes GitHub redact it
+          # everywhere in the log, including in that header.
+          python - <<'PY' > /tmp/neon.env
           import os
           from urllib.parse import urlparse, unquote
           u = urlparse(os.environ["DATABASE_URL"])
-          print(f"NEON_HOST={u.hostname}")
-          print(f"NEON_PORT={u.port or 5432}")
-          print(f"NEON_USER={unquote(u.username or '')}")
-          print(f"NEON_PASSWORD={unquote(u.password or '')}")
-          print(f"NEON_DB={u.path.lstrip('/')}")
+          for key, value in (
+              ("NEON_HOST", u.hostname),
+              ("NEON_PORT", u.port or 5432),
+              ("NEON_USER", unquote(u.username or "")),
+              ("NEON_PASSWORD", unquote(u.password or "")),
+              ("NEON_DB", u.path.lstrip("/")),
+          ):
+              print(f"{key}={value}")
           PY
+          while IFS='=' read -r key value; do
+            echo "::add-mask::$value"
+          done < /tmp/neon.env
+          cat /tmp/neon.env >> "$GITHUB_ENV"
+          rm -f /tmp/neon.env
 
       - name: Source freshness
         working-directory: dbt_project
