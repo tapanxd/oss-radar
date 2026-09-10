@@ -1,0 +1,58 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Append-only observation log written by the Phase 0 collector
+      (collector/collect.py) running on a daily GitHub Actions cron. dbt reads
+      this schema and never writes to it.
+    schema: raw
+    # loaded_at_field is set PER TABLE, not here: the two tables timestamp
+    # different things (observed_at vs started_at) and a source-level default
+    # silently breaks freshness on whichever table lacks the column.
+    freshness:
+      # The cron fires daily at 06:15 UTC. 36h tolerates one delayed or queued
+      # run (Actions routinely defers scheduled jobs by hours); 72h means two
+      # consecutive days were missed, which is a real gap worth failing on.
+      warn_after: {count: 36, period: hour}
+      error_after: {count: 72, period: hour}
+
+    tables:
+      - name: repo_observations
+        description: >
+          One row per tracked repo per calendar day, holding the full GitHub
+          API payload plus the extracted fields change detection diffs against.
+          Unique on (repo_full_name, observed_date) - a same-day re-run upserts
+          rather than duplicating, which is the idempotency property the whole
+          pipeline depends on.
+        # Freshness measured against when the collector observed the repo, not
+        # when dbt last ran.
+        loaded_at_field: observed_at
+        columns:
+          - name: id
+            description: Surrogate key. Not stable across a restore; do not join on it.
+            data_tests: [not_null, unique]
+          - name: repo_full_name
+            description: "owner/name as returned by the API, which may differ from what was requested if the repo was renamed or transferred."
+            data_tests: [not_null]
+          - name: observed_date
+            description: Calendar date (UTC) of the observation. The grain column.
+            data_tests: [not_null]
+          - name: raw_repo_payload
+            description: Full /repos API response, kept so fields not extracted today are recoverable later.
+        data_tests:
+          - dbt_utils.unique_combination_of_columns:
+              arguments:
+                combination_of_columns: [repo_full_name, observed_date]
+
+      - name: collection_runs
+        description: >
+          One row per collector invocation. Exists so a missed or partial
+          collection is a queryable fact rather than something discovered
+          months later by noticing absent dates. Feeds int_collection_gaps.
+        loaded_at_field: started_at
+        columns:
+          - name: run_id
+            data_tests: [not_null, unique]
+          - name: started_at
+            data_tests: [not_null]

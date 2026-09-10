@@ -1,0 +1,46 @@
+# Repo-local profiles.yml, not ~/.dbt/profiles.yml.
+#
+# dbt resolves profiles in this order: --profiles-dir flag, DBT_PROFILES_DIR,
+# the current working directory, then ~/.dbt/. Keeping it here means a reviewer
+# can clone the repo, `docker compose up -d`, and run dbt with no hidden
+# machine-local setup. That is worth more in a portfolio repo than following
+# the ~/.dbt convention.
+#
+# NO SECRETS IN THIS FILE. The dev credentials are the throwaway ones from
+# docker-compose.yml and are not sensitive. Everything for prod comes from
+# environment variables supplied by .env (gitignored) or CI secrets.
+
+radar:
+  target: dev
+  outputs:
+
+    # Local Docker Postgres. Seeded from a Neon dump via scripts/seed_dev.sh.
+    dev:
+      type: postgres
+      host: localhost
+      # 5433 on the host, not 5432 - see the port note in docker-compose.yml.
+      port: 5433
+      user: radar
+      password: radar
+      dbname: warehouse
+      # Per-developer schema so two people never build over each other. dbt
+      # prefixes model schemas onto this, e.g. dbt_tapan_staging.
+      schema: dbt_tapan
+      threads: 4
+
+    # Neon. Builds into the `analytics` schema; the collector owns `raw` and
+    # dbt must never write there. Used by CI and by scheduled prod runs, not
+    # for day-to-day development.
+    prod:
+      type: postgres
+      host: "{{ env_var('NEON_HOST') }}"
+      port: "{{ env_var('NEON_PORT', '5432') | int }}"
+      user: "{{ env_var('NEON_USER') }}"
+      password: "{{ env_var('NEON_PASSWORD') }}"
+      dbname: "{{ env_var('NEON_DB') }}"
+      schema: analytics
+      threads: 4
+      sslmode: require
+      # Neon scales compute to zero when idle; the first connection after a
+      # quiet period has a few seconds of cold start. Do not lower this.
+      connect_timeout: 30

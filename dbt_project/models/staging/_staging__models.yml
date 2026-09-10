@@ -1,0 +1,84 @@
+version: 2
+
+models:
+  - name: stg_repo_observations
+    description: >
+      One row per tracked repo per observed calendar day. Cast and renamed from
+      raw.repo_observations with owner and name split out; no logic applied.
+      This is the base of everything downstream - int_repo_state_history
+      collapses it into SCD2 validity ranges.
+    columns:
+      - name: observation_id
+        description: Surrogate key from the collector. Not stable across a restore.
+        data_tests: [not_null, unique]
+      - name: repo_full_name
+        description: "owner/name as returned by the GitHub API."
+        data_tests: [not_null]
+      - name: repo_owner
+        description: Org or user, split from repo_full_name.
+        data_tests: [not_null]
+      - name: repo_name
+        description: Repository name, split from repo_full_name.
+        data_tests: [not_null]
+      - name: category
+        description: Tracking category assigned in collector/repos.yml.
+        data_tests:
+          - accepted_values:
+              # An unexpected category fails the build rather than silently
+              # reaching the digest. Adding a category to repos.yml means
+              # adding it here too - that friction is deliberate.
+              arguments:
+                values:
+                  - coding-agents
+                  - mcp-servers
+                  - skills-and-plugins
+                  - eval-harnesses
+                  - orchestration
+                  - model-serving
+                  - unclassified
+      - name: priority
+        description: Repo priority from repos.yml; raises materiality by one level downstream.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [high, normal, low]
+      - name: observed_date
+        description: UTC calendar date of the observation. Grain column.
+        data_tests: [not_null]
+      - name: is_archived
+        description: Whether GitHub reports the repo archived. False to true is a critical change event.
+      - name: license_spdx
+        description: SPDX identifier. Null where GitHub reports no detectable license, which is distinct from a license being removed.
+      - name: latest_release_tag
+        description: Tag of the most recent release, or null if the repo has never released. Parsed for semver downstream.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [repo_full_name, observed_date]
+
+  - name: stg_collection_runs
+    description: >
+      One row per collector invocation, cast and renamed from
+      raw.collection_runs, with run_date and partial/incomplete flags derived.
+      Used by int_collection_gaps to distinguish "the collector ran and the
+      repo was skipped" from "the collector never ran that day" - these are
+      different blind spots and the digest reports them differently.
+    columns:
+      - name: run_id
+        description: Surrogate key for the run.
+        data_tests: [not_null, unique]
+      - name: started_at
+        description: When the collector process began.
+        data_tests: [not_null]
+      - name: run_date
+        description: UTC calendar date the run started.
+        data_tests: [not_null]
+      - name: is_partial
+        description: True when any repo failed or was skipped, typically from the rate-limit floor being reached.
+        data_tests: [not_null]
+      - name: is_incomplete
+        description: True when finished_at is null, meaning the collector died mid-run rather than stopping cleanly.
+        data_tests: [not_null]
+      - name: repos_succeeded
+        description: Count of repos successfully observed in this run.
+        data_tests: [not_null]

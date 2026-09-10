@@ -1,0 +1,11 @@
+# Normalize to LF in the repo. Without this, core.autocrlf=true on Windows
+# checks shell scripts out with CRLF and they fail on Linux runners with
+# "bad interpreter: /usr/bin/env bash^M" - which is a confusing error to chase.
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.sql   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.py    text eol=lf
+*.md    text eol=lf

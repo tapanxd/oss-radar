@@ -1,0 +1,48 @@
+# Local development stack for oss-radar.
+#
+# postgres:18 matches Neon production (18.6), NOT the postgres:16 in SETUP.md.
+# This is deliberate: pg_dump refuses to dump a server newer than itself, so a
+# pg16 client cannot seed from Neon at all. Matching the major version also
+# removes a class of dev/prod drift. If Neon upgrades its major, bump this.
+#
+# TWO DATABASES IN ONE CONTAINER, DELIBERATELY:
+#   warehouse  -> dbt builds here (dev target). Seeded from a Neon dump.
+#   airflow    -> Airflow's metadata DB in Phase 2. Created by init/01-airflow-db.sql.
+#
+# These are never the same database. Pointing dbt at Airflow's metadata DB is a
+# real mistake people make and is miserable to debug. See DESIGN.md section 3.
+#
+# Production (Neon) is a separate instance entirely and is NOT in this file.
+# The collector writes there; nothing in this compose stack may write to it.
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: radar-postgres
+    environment:
+      POSTGRES_USER: radar
+      POSTGRES_PASSWORD: radar
+      POSTGRES_DB: warehouse
+    ports:
+      # Host 5433, not 5432. If a native Postgres is ever installed on Windows
+      # it grabs 5432 and the collision is confusing to diagnose. Inside the
+      # compose network the port is still 5432.
+      - "5433:5432"
+    volumes:
+      # postgres:18+ stores data in a major-version subdirectory
+      # (/var/lib/postgresql/18/docker) so that pg_upgrade --link works without
+      # crossing a mount boundary. The mount therefore goes at the PARENT dir.
+      # Mounting at /var/lib/postgresql/data — correct for pg16 and what
+      # SETUP.md says — makes the container refuse to start on 18.
+      - pgdata:/var/lib/postgresql
+      # Runs ONLY on first init of an empty data dir. Changing these files later
+      # does nothing until `docker compose down -v` wipes the volume.
+      - ./init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "radar", "-d", "warehouse"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

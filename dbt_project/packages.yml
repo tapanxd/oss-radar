@@ -1,0 +1,5 @@
+packages:
+  # Used for unique_combination_of_columns and the date spine that
+  # int_collection_gaps needs to detect missing days.
+  - package: dbt-labs/dbt_utils
+    version: [">=1.1.0", "<2.0.0"]

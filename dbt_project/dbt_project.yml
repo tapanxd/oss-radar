@@ -1,0 +1,37 @@
+name: radar
+version: "0.1.0"
+config-version: 2
+
+profile: radar
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  radar:
+    staging:
+      # Cast and rename only. Views so they are always current and cost nothing
+      # to rebuild. See DESIGN.md section 5.
+      +materialized: view
+      +schema: staging
+    intermediate:
+      # The real logic. Never exposed to consumers.
+      +materialized: view
+      +schema: intermediate
+    marts:
+      # Consumable. Tables so the digest and dashboard read from settled data
+      # rather than re-running the whole SCD2 computation on every query.
+      +materialized: table
+      +schema: marts
+
+seeds:
+  radar:
+    +schema: seeds
+
+# Warn on anything unparsed rather than letting it pass silently.
+flags:
+  send_anonymous_usage_stats: false
