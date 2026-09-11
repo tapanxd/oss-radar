@@ -189,10 +189,18 @@ cp .env.example .env        # add your Neon URL and a GitHub PAT
 make up                     # start local Postgres, wait for healthcheck
 make seed                   # pull the raw schema down from Neon (read-only)
 make build                  # run and test every model
+make digest                 # render digests/YYYY-WNN.md
+
+make airflow-build          # once: build the Airflow image with dbt baked in
+make airflow-up             # Airflow UI at http://localhost:8081
 ```
 
 `make help` lists everything. `make reset` rebuilds the whole dev environment
 from an empty volume; `make ci` runs exactly what CI runs.
+
+Airflow starts with all DAGs paused. Unpausing one runs its most recent missed
+interval immediately, so `radar_collect` defaults to dry-run outside
+production.
 
 No Postgres client tools are needed — `pg_dump` runs inside the container, which
 also guarantees the client version matches the server.

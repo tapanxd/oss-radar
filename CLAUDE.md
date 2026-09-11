@@ -69,6 +69,21 @@ from raw.repo_observations;
   `digests/` is a human step (git inside a Windows-mounted container is
   fragile). Documented in the DAG.
 
+### Start here next session
+
+1. `make up && make airflow-up` (Docker Desktop must be running).
+2. Run the sanity query below; expect ≥4 days of observations.
+3. `make seed && make build` — 173 tests. Then `make digest` to refresh
+   `digests/2026-W37.md` (still partial until 2026-09-13).
+4. Pick from Phase 3: dashboard (Metabase in compose, or Streamlit), the two
+   README screenshots (Airflow grid + Assets page at http://localhost:8081),
+   or open the first real PR to exercise Slim CI's deferral path.
+5. **Confirm the Neon password was rotated.** If not, that comes first.
+
+Every DAG is currently UNPAUSED locally. `radar_collect` is in dry-run and
+`radar_transform_daily` builds the local warehouse only, so nothing writes to
+Neon from Airflow unless `DBT_TARGET=prod` is set.
+
 ### Airflow gotcha that already bit once
 
 **Unpausing a DAG runs its most recent missed interval immediately, even with
@@ -264,7 +279,6 @@ DESIGN.md            source of truth
 
 ## Definition of done
 
-See `DESIGN.md` §11 for the full checklist. Don't mark Phase 1 complete
-without: Slim CI actually working (not just configured), every change event
-carrying real evidence, and the snapshots-vs-derived-SCD2 decision written
-into the eventual README.
+See `DESIGN.md` §11 — it is now a live checklist with 6 of 11 ticked. The
+remaining five: three committed digests (needs time), Slim CI on a real PR,
+two Airflow screenshots, and the dashboard.

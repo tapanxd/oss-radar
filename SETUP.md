@@ -225,17 +225,39 @@ start Postgres, reseed from Neon, build and test every model.
 
 ## B5. Airflow
 
-Pull the official compose file and **strip it to LocalExecutor** — the default ships CeleryExecutor with Redis and a separate worker, which triples memory use for no benefit here.
+Built. Everything is in `docker-compose.yml` under the `airflow` profile, so
+`make up` still starts only Postgres.
 
-- Set `AIRFLOW__CORE__EXECUTOR: LocalExecutor`
-- Remove the `redis` and `airflow-worker` services
-- Point `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN` at the `airflow` database, not `warehouse`
-- **On Linux:** set `AIRFLOW_UID=$(id -u)` in `.env`, or DAG files end up root-owned and unwritable
-- Pin an exact Airflow version. 2.x and 3.x differ on `Dataset` vs `Asset` and some import paths.
+```bash
+make airflow-build   # once: apache/airflow:3.3.1 + dbt + collector deps
+make airflow-up      # api-server, scheduler, dag-processor -> http://localhost:8081
+make airflow-down    # stop Airflow, keep Postgres
+make airflow-logs    # tail scheduler + dag-processor
+```
 
-Install dbt into the Airflow image so `BashOperator` can call it directly. A separate dbt container means solving networking and volume mounts you don't need to solve.
+No login locally (`SIMPLE_AUTH_MANAGER_ALL_ADMINS=true`; never set that anywhere
+public). Port 8081 because `dbt docs serve` holds 8080.
 
----
+What was decided, and why it differs from the older text above:
+
+- **Three services, not the official compose file's seven.** LocalExecutor
+  runs tasks inside the scheduler, so there is no Celery worker, Redis or
+  Flower. 3.x split DAG parsing into its own `dag-processor` service, so that
+  one is present. No triggerer: nothing uses deferrable operators.
+- **Metadata in the `airflow` database, dbt in `warehouse`.** Same container,
+  never the same database.
+- **dbt is baked into the Airflow image.** `BashOperator` calls it directly.
+- **Pinned to 3.3.1.** `from airflow.sdk import dag, task, Asset, Param`.
+- **DAGs start paused.** Unpausing one runs its most recent missed interval
+  *immediately*, even with `catchup=False`. `radar_collect` therefore defaults
+  `dry_run` to true unless `DBT_TARGET=prod`; it wrote to Neon once before
+  that guard existed.
+- **`DBT_TARGET`** (default `dev`) decides whether Airflow builds the local
+  warehouse or Neon. Set it in `.env` to switch.
+
+Three DAGs: `radar_collect` (49 mapped tasks), `radar_transform_daily` (dbt,
+emits an Asset), `radar_digest_weekly` (Asset-triggered, renders `digests/`).
+Their module docstrings are the reference.
 
 ## Verification checklist
 
@@ -256,7 +278,8 @@ Install dbt into the Airflow image so `BashOperator` can call it directly. A sep
 - [x] `make seed` reloads from Neon and is safe to re-run
 - [x] `make build` green
 - [x] `make reset` rebuilds the whole environment from an empty volume
-- [ ] Airflow UI reachable, LocalExecutor, metadata DB separate
+- [x] Airflow UI reachable at :8081, LocalExecutor, metadata DB separate
+- [x] All three DAGs have run green; Asset trigger observed
 
 ---
 

@@ -11,7 +11,7 @@ Audience: this doc plus the three `DESIGN-*.md` files are the brief handed to Cl
 | # | Project | Repo name | Primary skill demonstrated | Build size |
 |---|---------|-----------|---------------------------|-----------|
 | 1 | SaaS Metrics / MRR Waterfall | `saas-metrics-warehouse` | Analytics engineering — hard SQL, dbt modelling, metric correctness | S–M |
-| 2 | Open Source Project Health | `oss-health-monitor` | Data engineering — orchestration at scale, API rate limits, incremental extraction | M |
+| 2 | Open Source Project Health | `oss-radar` (renamed from `oss-health-monitor`) | Data engineering — orchestration at scale, API rate limits, incremental extraction | M — **M1–M4 done, M5 in progress** (as of 2026-09-11) |
 | 3 | Real Estate Document Intelligence | `re-doc-intelligence` | Unstructured → structured, data quality, branching pipelines | M–L |
 
 They are deliberately different in character. Do not let them converge into three versions of the same "API → warehouse → dashboard" project.
