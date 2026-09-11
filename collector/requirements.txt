@@ -1,4 +1,7 @@
 requests==2.32.3
 psycopg[binary]==3.2.3
 PyYAML==6.0.2
-python-dotenv==1.0.1
+# 1.2.3, not 1.0.1: dbt-core 1.12 requires python-dotenv>=1.2, and the Airflow
+# image installs both the collector's pins and dbt into one environment. The
+# only API this project uses, load_dotenv(), is unchanged between them.
+python-dotenv==1.2.3

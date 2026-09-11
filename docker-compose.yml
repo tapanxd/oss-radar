@@ -16,13 +16,78 @@
 #
 # TWO DATABASES IN ONE CONTAINER, DELIBERATELY:
 #   warehouse  -> dbt builds here (dev target). Seeded from a Neon dump.
-#   airflow    -> Airflow's metadata DB in Phase 2. Created by init/01-airflow-db.sql.
+#   airflow    -> Airflow's metadata DB. Created by init/01-airflow-db.sql.
 #
 # These are never the same database. Pointing dbt at Airflow's metadata DB is a
 # real mistake people make and is miserable to debug. See DESIGN.md section 3.
 #
 # Production (Neon) is a separate instance entirely and is NOT in this file.
-# The collector writes there; nothing in this compose stack may write to it.
+# The collector writes there; nothing in this compose stack may write to it,
+# except the mapped-task collector DAG, which is the collector by another route.
+#
+# AIRFLOW is under the `airflow` profile, so plain `docker compose up` (and
+# `make up`) starts only Postgres for dbt work. `make airflow-up` starts the
+# rest. Three Airflow services, not the official compose file's seven:
+#
+#   apiserver      the UI and the execution API that tasks report to
+#   scheduler      LocalExecutor runs tasks in-process here
+#   dag-processor  parses DAG files; separated from the scheduler in 3.x
+#
+# No Celery worker, no Redis, no Flower, no triggerer: LocalExecutor needs
+# none of them, and nothing here uses deferrable operators.
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: airflow/Dockerfile
+  image: oss-radar/airflow:3.3.1
+  profiles: [airflow]
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    # The `airflow` database, NOT `warehouse`. See the note at the top.
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://radar:radar@postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    # Local dev only: skip the login screen. Never set this anywhere public.
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"
+    # 3.x: tasks call back to the api-server over HTTP, and the two sides must
+    # share a signing secret. Fixed here so a restart does not invalidate it.
+    AIRFLOW__API_AUTH__JWT_SECRET: local-dev-only-not-a-real-secret
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__API__BASE_URL: http://localhost:${RADAR_AIRFLOW_PORT:-8081}
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+
+    # --- what the DAGs need -------------------------------------------
+    # dbt, run inside the container. The dev target reaches Postgres by its
+    # compose service name, so the host/port overrides below point it there
+    # rather than at localhost:5433, which is the HOST's view of the same DB.
+    DBT_PROFILES_DIR: /opt/airflow/dbt_project
+    DBT_PROJECT_DIR: /opt/airflow/dbt_project
+    DBT_TARGET: ${DBT_TARGET:-dev}
+    RADAR_PG_HOST: postgres
+    RADAR_PG_PORT: "5432"
+    # Passed through from .env for the prod target and the collector DAG.
+    GH_TOKEN: ${GH_TOKEN:-}
+    DATABASE_URL: ${DATABASE_URL:-}
+    NEON_HOST: ${NEON_HOST:-}
+    NEON_PORT: ${NEON_PORT:-5432}
+    NEON_USER: ${NEON_USER:-}
+    NEON_PASSWORD: ${NEON_PASSWORD:-}
+    NEON_DB: ${NEON_DB:-}
+    DIGESTS_DIR: /opt/airflow/digests
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./include:/opt/airflow/include
+    - ./collector:/opt/airflow/collector
+    - ./dbt_project:/opt/airflow/dbt_project
+    - ./digests:/opt/airflow/digests
+    - airflow-logs:/opt/airflow/logs
+  # On Linux, set AIRFLOW_UID=$(id -u) in .env or files written to the mounted
+  # dirs come out root-owned. Docker Desktop on Windows/macOS does not need it.
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
 
 services:
   postgres:
@@ -52,5 +117,57 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------
+  # Airflow
+  # ---------------------------------------------------------------------
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: radar-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        echo "metadata database migrated"
+    restart: "no"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    container_name: radar-airflow-apiserver
+    command: api-server
+    ports:
+      # 8081 on the host: 8080 is taken by `dbt docs serve`.
+      - "${RADAR_AIRFLOW_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: radar-airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: radar-airflow-dag-processor
+    command: dag-processor
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  airflow-logs:

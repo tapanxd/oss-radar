@@ -17,10 +17,15 @@ radar:
     # Local Docker Postgres. Seeded from a Neon dump via scripts/seed_dev.sh.
     dev:
       type: postgres
-      host: localhost
-      # Must match the host port docker-compose publishes. Both read
-      # RADAR_PG_PORT from .env with the same 5433 default, so changing the
-      # port in one place is enough. See the port note in docker-compose.yml.
+      # Both host and port are overridable so the SAME target works from two
+      # places that see the database differently:
+      #
+      #   from the host      localhost:5433  (RADAR_PG_PORT, published by compose)
+      #   inside Airflow     postgres:5432   (the compose service name; set in
+      #                                       docker-compose.yml's environment)
+      #
+      # Defaults are the host view, so `make build` needs nothing set.
+      host: "{{ env_var('RADAR_PG_HOST', 'localhost') }}"
       port: "{{ env_var('RADAR_PG_PORT', '5433') | int }}"
       user: radar
       password: radar
