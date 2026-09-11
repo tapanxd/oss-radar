@@ -5,8 +5,8 @@ MCP servers, eval harnesses, orchestration frameworks, model serving — and
 produces a weekly digest of the changes that actually matter, ranked, with
 evidence attached to every line.
 
-**Stack:** dbt Core 1.12 · PostgreSQL 18 · Neon · GitHub Actions · Docker
-(Apache Airflow in progress)
+**Stack:** dbt Core 1.12 · Apache Airflow 3.3 · PostgreSQL 18 · Neon ·
+GitHub Actions · Docker
 
 ---
 
@@ -360,13 +360,13 @@ produces fewer digest lines than its actual activity warrants.
 |---|---|
 | **0 — Collector** | Running daily since 2026-09-09 |
 | **1 — Warehouse** | Complete. 13 models, 172 dbt tests, 13 pytest, Slim CI green |
-| **2 — Airflow** | Not started. Two DAGs, asset-triggered digest, collector as a mapped task |
-| **3 — Polish** | Not started. Dashboard, committed digests, DAG screenshots |
+| **2 — Airflow** | Running locally. Three DAGs; Asset-triggered digest; collector as 49 mapped tasks |
+| **3 — Polish** | README done. Dashboard and DAG screenshots outstanding |
 
-Known to be missing: no `digests/YYYY-WW.md` has been rendered yet — the data
-for it exists in `agg_weekly_digest`, but writing the file is Phase 2's job.
-Slim CI's deferral path has not yet run on an actual pull request; only the
-full-build fallback and the production build have executed.
+The first digest is committed: [`digests/2026-W37.md`](digests/2026-W37.md),
+rendered from three days of collection and still marked partial until the
+week closes. Slim CI's deferral path has not yet run on an actual pull
+request; only the full-build fallback and the production build have executed.
 
 ---
 

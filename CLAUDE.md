@@ -38,8 +38,14 @@ the conflict.
   and match dev exactly. The `prod-manifest` artifact is published on every
   push to `main`, so Slim CI has something to defer against. Slim selection is
   verified: touching one model selects 7 of 13 and defers the other 6.
-- **Phase 2 (Airflow) — NOT STARTED.**
-- **Phase 3 (polish/README) — NOT STARTED.**
+- **Phase 2 (Airflow) — BUILT AND RUNNING LOCALLY.** Three DAGs on Airflow
+  3.3.1, LocalExecutor, metadata in the `airflow` database. All three have run
+  green: `radar_transform_daily` (dbt layer by layer, emits an Asset),
+  `radar_digest_weekly` (Asset-triggered, renders `digests/`), and
+  `radar_collect` (49 dynamically mapped tasks, one per repo, 25s end to end).
+  Asset triggering verified: a transform success produced an
+  `asset_triggered__` digest run. `make airflow-up` → http://localhost:8081.
+- **Phase 3 (polish) — README done; dashboard and DAG screenshots not yet.**
 
 Before touching anything, run this and don't proceed if it looks wrong:
 
@@ -52,13 +58,25 @@ from raw.repo_observations;
 
 - **Slim CI's deferral path has never executed** — no PR has been opened yet.
   Only the full-build fallback and the prod build have actually run.
-- **No digest has been rendered.** `agg_weekly_digest` produces the rows;
-  nothing writes `digests/YYYY-WW.md` yet. That is Phase 2's
-  `render_markdown` task.
-- **There is no README.** DESIGN.md §11 wants it to open by addressing "why
-  not just GitHub notifications" and to document the snapshots-vs-derived-SCD2
-  decision.
-- Phase 2 (Airflow) and Phase 3 (dashboard) not started.
+- **Only one digest committed** (`digests/2026-W37.md`, partial week).
+  DESIGN.md §11 wants three or more from real accumulated changes.
+- **No Airflow screenshots in the README** — the 49-task mapped grid and the
+  Asset dependency between the two DAGs. Take them from http://localhost:8081.
+- **No dashboard.** DESIGN.md §11: category pulse over time, change feed,
+  repo timeline. The marts for all three exist.
+- **`astronomer-cosmos`** not adopted; dbt runs via BashOperator. Nice-to-have.
+- **Digest `publish` does not commit.** It reports files written; committing
+  `digests/` is a human step (git inside a Windows-mounted container is
+  fragile). Documented in the DAG.
+
+### Airflow gotcha that already bit once
+
+**Unpausing a DAG runs its most recent missed interval immediately, even with
+`catchup=False`.** The first time `radar_collect` was unpaused in dev it wrote
+49 rows to Neon before anyone chose to. Harmless (upsert; identical to the
+cron's rows) but unintended. `dry_run` now defaults to `True` unless
+`DBT_TARGET=prod`. The same applies to `radar_transform_daily`: unpausing it
+creates a `scheduled__` run straight away.
 
 ### Security note
 
@@ -74,11 +92,18 @@ Anything that derives a value from a secret must `::add-mask::` it first.
 
 ### Data reality check
 
-Only 2 days of history so far (2026-09-09, 2026-09-10). Every windowed signal
-is correctly refusing to report: 0 star spikes, caveat "insufficient history:
-2 of 7 days". Models that need no history already work — 6 release events
-including 2 genuine breaking releases, 3 archived repos, 5 transferred repos,
-1 stale repo. Do not "fix" the empty velocity output; it is the guard working.
+Three days of history (2026-09-09 to 2026-09-11). Every windowed signal is
+correctly refusing to report: 0 star spikes, caveat "insufficient history:
+3 of 7 days". Models that need no history already work — 10 digest lines
+including the first genuine **critical metadata event**: `dbt-labs/dbt-core`
+was renamed to `dbt-labs/dbt` on 2026-09-11, caught by the numeric-id
+partitioning as a state change on one repo. Also 2 breaking releases, 3
+archived repos, 5 transferred repos, 1 stale repo. Do not "fix" the empty
+velocity output; it is the guard working.
+
+The digest grain is one row per repo per change type per week — cline/cline
+shipping two patch releases in one week collapses to "2 patch releases
+v0.0.24 -> v0.0.26". This was forced by real data on day 3.
 
 ---
 
@@ -178,7 +203,9 @@ dbt_project/         all 13 models built and tested
 tests/               pytest: collector idempotency, rate limits, config
 .sqlfluff            lint config; `make lint` / `make fix`
 pytest.ini
-dags/                TO BUILD in Phase 2
+dags/                three DAGs: radar_transform_daily, radar_digest_weekly, radar_collect
+include/             render_digest.py (the digest renderer), radar_assets.py (shared Asset)
+airflow/Dockerfile   apache/airflow:3.3.1 + dbt + collector deps
 digests/             weekly digests land here — commit them, don't gitignore
 DESIGN.md            source of truth
 ```
@@ -196,8 +223,17 @@ DESIGN.md            source of truth
   5,000/hour budget — you can have budget remaining and still get throttled
   for firing requests too fast. Relevant when Phase 2 raises mapped-task
   concurrency.
-- Airflow 3.x renamed `Dataset` to `Asset` and changed import paths. Check
-  the pinned version before writing asset-triggered DAG code.
+- Airflow 3.x renamed `Dataset` to `Asset` and changed import paths. We are
+  on 3.3.1: `from airflow.sdk import dag, task, Asset, Param`;
+  `from airflow.providers.standard.operators.bash import BashOperator`.
+- Never import one DAG file from another. The dag-processor executes the
+  imported file too and attributes the DAG to whichever it parsed last. Shared
+  objects (the Asset) live in `include/radar_assets.py`.
+- Inside the Airflow container Postgres is `postgres:5432`, not
+  `localhost:5433`. The dbt dev target reads `RADAR_PG_HOST`/`RADAR_PG_PORT`
+  and compose sets them; the renderer and DAGs do the same.
+- `airflow db migrate` must run before the api-server starts; `airflow-init`
+  does it and the others `depends_on` its completion.
 - We're on `psycopg` v3 (`psycopg[binary]`), not `psycopg2` — the
   collector's Python is 3.13 and `psycopg2-binary` doesn't reliably have
   wheels for it. Don't reintroduce `psycopg2` imports. (dbt-postgres pulls its

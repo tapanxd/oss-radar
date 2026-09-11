@@ -22,7 +22,7 @@ LOAD_ENV := set -a; [ -f .env ] && . ./.env; set +a;
 DBT := ../.venv/Scripts/dbt.exe
 DBT_DIR := dbt_project
 
-.PHONY: help up down nuke seed debug build test docs collect collect-dry fresh reset check lint fix pytest ci
+.PHONY: help up down nuke seed debug build test docs collect collect-dry fresh reset check lint fix pytest ci digest airflow-up airflow-down airflow-logs airflow-build
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) \
@@ -77,6 +77,24 @@ pytest:  ## Run the collector test suite
 check: fresh build  ## What CI runs: freshness, then a full build with tests
 
 ci: lint pytest check  ## Everything CI runs, locally, before opening a PR
+
+digest:  ## Render digests/YYYY-WNN.md from the dev warehouse
+	@$(LOAD_ENV) .venv/Scripts/python.exe include/render_digest.py
+
+airflow-build:  ## Build the Airflow image (dbt + collector deps baked in)
+	docker compose --profile airflow build
+
+airflow-up:  ## Start Airflow (api-server, scheduler, dag-processor) on :8081
+	docker compose --profile airflow up -d
+	@printf "waiting for airflow api-server"
+	@for i in $$(seq 1 90); do 	  s=$$(docker inspect --format '{{.State.Health.Status}}' radar-airflow-apiserver 2>/dev/null || echo none); 	  if [ "$$s" = "healthy" ]; then echo " ready -> http://localhost:$${RADAR_AIRFLOW_PORT:-8081}"; exit 0; fi; 	  printf "."; sleep 2; 	done; echo " TIMED OUT"; docker compose --profile airflow logs --tail 30 airflow-apiserver; exit 1
+
+airflow-down:  ## Stop Airflow, keep Postgres running
+	docker compose --profile airflow stop airflow-apiserver airflow-scheduler airflow-dag-processor
+	docker compose --profile airflow rm -f airflow-apiserver airflow-scheduler airflow-dag-processor airflow-init
+
+airflow-logs:  ## Tail Airflow scheduler and dag-processor logs
+	docker compose --profile airflow logs -f --tail 50 airflow-scheduler airflow-dag-processor
 
 collect-dry:  ## Run the collector against GitHub without writing anything
 	@$(LOAD_ENV) .venv/Scripts/python.exe collector/collect.py --config collector/repos.yml --dry-run
