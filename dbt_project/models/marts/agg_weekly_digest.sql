@@ -69,16 +69,16 @@ collapsed as (
         min(event_count)                                as event_count,
 
         min(before_value) filter (where seq_asc = 1)    as before_value,
-        min(after_value)  filter (where seq_desc = 1)   as after_value,
+        min(after_value) filter (where seq_desc = 1)   as after_value,
 
         (
             -- min() on the text, then cast: Postgres has no min(jsonb), and
             -- the filter picks exactly one row so min() is just "the value".
             (min(evidence) filter (where seq_desc = 1))::jsonb
             || jsonb_build_object(
-                'event_count',  min(event_count),
+                'event_count', min(event_count),
                 'first_before', min(before_value) filter (where seq_asc = 1),
-                'last_after',   min(after_value)  filter (where seq_desc = 1),
+                'last_after', min(after_value) filter (where seq_desc = 1),
                 'all_after_values',
                     string_agg(after_value, ' -> ' order by detected_at, change_key)
             )
@@ -104,7 +104,7 @@ with_materiality_label as (
 weekly_gaps as (
 
     select
-        cast(date_trunc('week', missing_date) as date) as detected_week,
+        (date_trunc('week', missing_date))::date as detected_week,
         count(*)                                       as missing_observations,
         count(distinct github_repo_id)                 as repos_with_gaps,
         count(distinct missing_date)                   as dates_with_gaps
