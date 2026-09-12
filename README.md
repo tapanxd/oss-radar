@@ -217,6 +217,10 @@ make dashboard              # build the dashboard from scripts/metabase_setup.py
 `make help` lists everything. `make reset` rebuilds the whole dev environment
 from an empty volume; `make ci` runs exactly what CI runs.
 
+Taking the project over, or need every decision explained? Read
+[`docs/HANDBOOK.md`](docs/HANDBOOK.md) — every component, how they connect,
+what was chosen and what was rejected, with diagrams.
+
 Airflow starts with all DAGs paused. Unpausing one runs its most recent missed
 interval immediately, so `radar_collect` defaults to dry-run outside
 production.

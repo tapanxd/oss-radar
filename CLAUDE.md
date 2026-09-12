@@ -228,6 +228,7 @@ dags/                three DAGs: radar_transform_daily, radar_digest_weekly, rad
 include/             render_digest.py (the digest renderer), radar_assets.py (shared Asset)
 airflow/Dockerfile   apache/airflow:3.3.1 + dbt + collector deps
 digests/             weekly digests land here — commit them, don't gitignore
+docs/HANDBOOK.md     the full explanation of the project, every decision and alternative
 docs/img/            the two Airflow screenshots the README embeds
 DESIGN.md            source of truth
 ```
