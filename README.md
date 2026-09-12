@@ -132,6 +132,22 @@ marts/           consumable, contract: enforced
   agg_repo_timeline         one row per repo per month
 ```
 
+### Orchestration
+
+Three DAGs on Airflow 3.3.1 with the LocalExecutor. `radar_transform_daily`
+runs dbt layer by layer and emits an Asset when the marts are rebuilt;
+`radar_digest_weekly` is scheduled on that Asset rather than on a clock, so a
+digest can never render against a stale warehouse.
+
+![The change_events Asset linking radar_transform_daily to radar_digest_weekly, with three asset events each of which triggered a digest run](docs/img/airflow-asset-lineage.png)
+
+`radar_collect` reads `repos.yml` at run time and expands into one mapped task
+per repo — 49 today, a different number tomorrow if the file changes — so a
+single repo failing or rate-limiting is isolated to its own task instance.
+The whole run is 27 seconds.
+
+![radar_collect's extract_repo task expanded to 49 mapped instances, all successful, 26.7 seconds end to end](docs/img/airflow-mapped-collector.png)
+
 ---
 
 ## Design decisions worth defending
@@ -397,7 +413,7 @@ produces fewer digest lines than its actual activity warrants.
 | **0 — Collector** | Running daily since 2026-09-09 |
 | **1 — Warehouse** | Complete. 13 models, 174 dbt tests, 13 pytest, Slim CI deferral proven on PR #1 |
 | **2 — Airflow** | Running locally. Three DAGs; Asset-triggered digest; collector as 49 mapped tasks |
-| **3 — Polish** | README and Metabase dashboard done. Airflow screenshots outstanding |
+| **3 — Polish** | README, Metabase dashboard and Airflow screenshots done. Two more weekly digests to accumulate |
 
 The first digest is committed: [`digests/2026-W37.md`](digests/2026-W37.md),
 rendered from three days of collection and still marked partial until the

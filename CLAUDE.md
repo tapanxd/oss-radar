@@ -47,7 +47,9 @@ the conflict.
   `radar_collect` (49 dynamically mapped tasks, one per repo, 25s end to end).
   Asset triggering verified: a transform success produced an
   `asset_triggered__` digest run. `make airflow-up` → http://localhost:8081.
-- **Phase 3 (polish) — README and dashboard done; DAG screenshots not yet.**
+- **Phase 3 (polish) — DONE except the digests that need time.** README,
+  Metabase dashboard, both Airflow screenshots (`docs/img/`, taken with
+  headless Chrome against the local UI; re-take the same way if the UI changes).
   Metabase runs under the `dashboard` compose profile with its app DB in a
   third database (`metabase`) in the local Postgres. `make dashboard` builds
   the whole thing through the API from `scripts/metabase_setup.py`;
@@ -64,8 +66,6 @@ from raw.repo_observations;
 
 - **Only one digest committed** (`digests/2026-W37.md`, partial week).
   DESIGN.md §11 wants three or more from real accumulated changes.
-- **No Airflow screenshots in the README** — the 49-task mapped grid and the
-  Asset dependency between the two DAGs. Take them from http://localhost:8081.
 - **`astronomer-cosmos`** not adopted; dbt runs via BashOperator. Nice-to-have.
 - **Digest `publish` does not commit.** It reports files written; committing
   `digests/` is a human step (git inside a Windows-mounted container is
@@ -77,8 +77,9 @@ from raw.repo_observations;
 2. Run the sanity query below; expect ≥4 days of observations.
 3. `make seed && make build` — 175 tests. Then `make digest` to refresh
    `digests/2026-W37.md` (still partial until 2026-09-13).
-4. Phase 3 remaining: the two README screenshots (Airflow grid + Assets page
-   at http://localhost:8081). `make metabase-up && make dashboard` brings the
+4. Nothing is left to build. Each week: `make seed && make build && make
+   digest`, then commit the new `digests/YYYY-WNN.md`, until three complete
+   weeks are committed. `make metabase-up && make dashboard` brings the
    dashboard back at http://localhost:3000/dashboard/2.
 5. ~~Confirm the Neon password was rotated.~~ Done 2026-09-12: reset in
    Neon, `DATABASE_URL` secret and `.env` updated, verified by a manual
@@ -227,6 +228,7 @@ dags/                three DAGs: radar_transform_daily, radar_digest_weekly, rad
 include/             render_digest.py (the digest renderer), radar_assets.py (shared Asset)
 airflow/Dockerfile   apache/airflow:3.3.1 + dbt + collector deps
 digests/             weekly digests land here — commit them, don't gitignore
+docs/img/            the two Airflow screenshots the README embeds
 DESIGN.md            source of truth
 ```
 
@@ -284,6 +286,5 @@ DESIGN.md            source of truth
 
 ## Definition of done
 
-See `DESIGN.md` §11 — it is now a live checklist with 8 of 11 ticked. The
-remaining three: three committed digests (needs time) and two Airflow
-screenshots.
+See `DESIGN.md` §11 — it is now a live checklist with 10 of 11 ticked. The
+one remaining item is three committed digests, which only time provides.

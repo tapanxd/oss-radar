@@ -2,7 +2,7 @@
 
 **Stack (locked):** dbt Core · Apache Airflow · Docker · PostgreSQL · Neon
 **Supersedes:** `DESIGN-oss-health.md`, `DESIGN-oss-radar.md`
-**Status:** Phases 0, 1 and 2 built and running. Phase 3 partially done (README, dashboard); Airflow screenshots outstanding. Definition of done in §11 tracks the specifics.
+**Status:** Phases 0, 1 and 2 built and running. Phase 3 done except for the digests that only time can accumulate (§11). Definition of done in §11 tracks the specifics.
 
 ---
 
@@ -253,8 +253,8 @@ Ship in this order. Do not start a phase before the previous one is genuinely do
 - [ ] Three or more real digests committed to `digests/`, from real accumulated changes — **one so far** (`2026-W37`, partial); needs two more weeks of collection
 - [x] Every digest entry carries verifiable evidence — `evidence` is `NOT NULL` at the database level via contract on `fct_change_events`
 - [x] Slim CI running on PRs, with the deferred-manifest setup working — proven on PR #1 (2026-09-12): deferred to the manifest from the previous `main` run, built 7 of 13 models into a per-PR schema on Neon, deferred the other 6 to `analytics_*`, full-build fallback skipped, CI schemas dropped afterwards
-- [ ] Airflow mapped-task grid screenshot in README — the grid exists (49 green squares at http://localhost:8081), not yet captured
-- [~] Asset-triggered digest DAG — built and verified (`asset_triggered__` runs observed); screenshot not yet captured
+- [x] Airflow mapped-task grid screenshot in README — `docs/img/airflow-mapped-collector.png`, `extract_repo [49]`, all success
+- [x] Asset-triggered digest DAG — built and verified (`asset_triggered__` runs observed); `docs/img/airflow-asset-lineage.png` shows the Asset between the two DAGs with three events that each triggered a digest run
 - [x] Collector idempotency proven by test — `tests/test_collector.py::test_rerunning_the_same_day_upserts_rather_than_duplicating`
 - [x] Dashboard: category pulse over time, change feed, repo timeline — Metabase in compose (`make metabase-up`), built from code by `scripts/metabase_setup.py` (`make dashboard`): fourteen native-SQL questions over `agg_category_pulse`, `fct_change_events` and `agg_repo_timeline` in three dashboard sections
 - [x] README opens by addressing "why not just GitHub notifications"
