@@ -77,3 +77,25 @@
         ''
     )
 {% endmacro %}
+
+
+{#
+  Everything BEFORE the version core: the component or package name a monorepo
+  puts in front of its tags. `desktop-v0.0.25` -> `desktop-`,
+  `@arizeai/phoenix-evals@2.5.0` -> `@arizeai/phoenix-evals@`, `v1.2.3` -> ``.
+  An optional leading v is stripped with the version, so a project that drops
+  or adds the v between releases still compares as the same line.
+
+  Two consecutive "latest" tags with different prefixes are two different
+  components, and their version numbers have nothing to do with each other -
+  `@arizeai/phoenix-evals@2.5.0` -> `arize-phoenix-v20.10.0` is not an
+  eighteen-major bump. The same last-triple anchoring as semver_part, so a
+  digit in the prefix does not split it.
+#}
+{% macro semver_prefix(tag_column) %}
+    regexp_replace(
+        {{ tag_column }},
+        '[vV]?[0-9]+\.[0-9]+\.[0-9]+(?!.*[0-9]+\.[0-9]+\.[0-9]+).*$',
+        ''
+    )
+{% endmacro %}
