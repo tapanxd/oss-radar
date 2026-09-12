@@ -22,7 +22,7 @@ LOAD_ENV := set -a; [ -f .env ] && . ./.env; set +a;
 DBT := ../.venv/Scripts/dbt.exe
 DBT_DIR := dbt_project
 
-.PHONY: help up down nuke seed debug build test docs collect collect-dry fresh reset check lint fix pytest ci digest airflow-up airflow-down airflow-logs airflow-build
+.PHONY: help up down nuke seed debug build test docs collect collect-dry fresh reset check lint fix pytest ci digest airflow-up airflow-down airflow-logs airflow-build metabase-up metabase-down dashboard
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) \
@@ -39,11 +39,14 @@ up:  ## Start the local dev Postgres and wait for it to be healthy
 	  printf "."; sleep 1; \
 	done; echo " TIMED OUT"; docker logs --tail 30 radar-postgres; exit 1
 
-down:  ## Stop the stack, keeping data
-	docker compose down
+# Every profile is named so Airflow and Metabase come down with Postgres. A
+# plain `docker compose down` only sees the default profile and would leave
+# them running against a database that no longer exists.
+down:  ## Stop the stack (Postgres, Airflow, Metabase), keeping data
+	docker compose --profile airflow --profile dashboard down
 
 nuke:  ## Stop the stack and DELETE the local volume (dev data only; prod untouched)
-	docker compose down -v
+	docker compose --profile airflow --profile dashboard down -v
 
 seed:  ## Reload the dev warehouse from the Neon raw schema (read-only against prod)
 	bash scripts/seed_dev.sh
@@ -95,6 +98,20 @@ airflow-down:  ## Stop Airflow, keep Postgres running
 
 airflow-logs:  ## Tail Airflow scheduler and dag-processor logs
 	docker compose --profile airflow logs -f --tail 50 airflow-scheduler airflow-dag-processor
+
+metabase-up:  ## Start Metabase on :3000 (creates its app DB if the volume predates it)
+	@$(LOAD_ENV) docker compose up -d postgres >/dev/null
+	@docker exec radar-postgres psql -U radar -d warehouse -tAc 	  "select 1 from pg_database where datname = 'metabase'" | grep -q 1 	  || docker exec radar-postgres psql -U radar -d warehouse -c "create database metabase"
+	docker compose --profile dashboard up -d metabase
+	@printf "waiting for metabase"
+	@for i in $$(seq 1 120); do 	  s=$$(docker inspect --format '{{.State.Health.Status}}' radar-metabase 2>/dev/null || echo none); 	  if [ "$$s" = "healthy" ]; then echo " ready -> http://localhost:$${RADAR_METABASE_PORT:-3000}"; exit 0; fi; 	  printf "."; sleep 2; 	done; echo " TIMED OUT"; docker logs --tail 30 radar-metabase; exit 1
+
+metabase-down:  ## Stop Metabase, keep Postgres running
+	docker compose --profile dashboard stop metabase
+	docker compose --profile dashboard rm -f metabase
+
+dashboard:  ## Build or update the oss-radar dashboard in Metabase from scripts/metabase_setup.py
+	@$(LOAD_ENV) .venv/Scripts/python.exe scripts/metabase_setup.py
 
 collect-dry:  ## Run the collector against GitHub without writing anything
 	@$(LOAD_ENV) .venv/Scripts/python.exe collector/collect.py --config collector/repos.yml --dry-run

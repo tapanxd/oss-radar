@@ -36,8 +36,10 @@ the conflict.
 - **CI is green and production exists on Neon.** `analytics_staging`,
   `analytics_intermediate`, `analytics_marts` and `analytics_seeds` are built
   and match dev exactly. The `prod-manifest` artifact is published on every
-  push to `main`, so Slim CI has something to defer against. Slim selection is
-  verified: touching one model selects 7 of 13 and defers the other 6.
+  push to `main`, so Slim CI has something to defer against. **Slim CI's
+  deferral path has executed on a real PR** (#1, 2026-09-12): found the prod
+  manifest, built 7 of 13 models into `ci_pr_1_*` on Neon, deferred the
+  other 6 to `analytics_*`, fallback step skipped, schemas dropped after.
 - **Phase 2 (Airflow) — BUILT AND RUNNING LOCALLY.** Three DAGs on Airflow
   3.3.1, LocalExecutor, metadata in the `airflow` database. All three have run
   green: `radar_transform_daily` (dbt layer by layer, emits an Asset),
@@ -45,7 +47,11 @@ the conflict.
   `radar_collect` (49 dynamically mapped tasks, one per repo, 25s end to end).
   Asset triggering verified: a transform success produced an
   `asset_triggered__` digest run. `make airflow-up` → http://localhost:8081.
-- **Phase 3 (polish) — README done; dashboard and DAG screenshots not yet.**
+- **Phase 3 (polish) — README and dashboard done; DAG screenshots not yet.**
+  Metabase runs under the `dashboard` compose profile with its app DB in a
+  third database (`metabase`) in the local Postgres. `make dashboard` builds
+  the whole thing through the API from `scripts/metabase_setup.py`;
+  idempotent, re-run after editing a query. Login is in `.env.example`.
 
 Before touching anything, run this and don't proceed if it looks wrong:
 
@@ -56,14 +62,10 @@ from raw.repo_observations;
 
 ### What is not done yet
 
-- **Slim CI's deferral path has never executed** — no PR has been opened yet.
-  Only the full-build fallback and the prod build have actually run.
 - **Only one digest committed** (`digests/2026-W37.md`, partial week).
   DESIGN.md §11 wants three or more from real accumulated changes.
 - **No Airflow screenshots in the README** — the 49-task mapped grid and the
   Asset dependency between the two DAGs. Take them from http://localhost:8081.
-- **No dashboard.** DESIGN.md §11: category pulse over time, change feed,
-  repo timeline. The marts for all three exist.
 - **`astronomer-cosmos`** not adopted; dbt runs via BashOperator. Nice-to-have.
 - **Digest `publish` does not commit.** It reports files written; committing
   `digests/` is a human step (git inside a Windows-mounted container is
@@ -75,9 +77,9 @@ from raw.repo_observations;
 2. Run the sanity query below; expect ≥4 days of observations.
 3. `make seed && make build` — 175 tests. Then `make digest` to refresh
    `digests/2026-W37.md` (still partial until 2026-09-13).
-4. Pick from Phase 3: dashboard (Metabase in compose, or Streamlit), the two
-   README screenshots (Airflow grid + Assets page at http://localhost:8081),
-   or open the first real PR to exercise Slim CI's deferral path.
+4. Phase 3 remaining: the two README screenshots (Airflow grid + Assets page
+   at http://localhost:8081). `make metabase-up && make dashboard` brings the
+   dashboard back at http://localhost:3000/dashboard/2.
 5. ~~Confirm the Neon password was rotated.~~ Done 2026-09-12: reset in
    Neon, `DATABASE_URL` secret and `.env` updated, verified by a manual
    `collect.yml` run (run 7, 49/49) and an Airflow restart.
@@ -126,7 +128,7 @@ v0.0.24 -> v0.0.26". This was forced by real data on day 3.
 
 ## Stack (locked — do not substitute without discussion)
 
-dbt Core 1.12 · Apache Airflow · Docker · PostgreSQL 18 · Neon
+dbt Core 1.12 · Apache Airflow · Docker · PostgreSQL 18 · Neon · Metabase
 
 - **Two Postgres instances.** Neon = production, holds the observation
   history, collector writes here, never point destructive dbt runs at it
@@ -208,11 +210,12 @@ collector/          Phase 0 — built, don't touch casually
   .env.example
 .github/workflows/
   collect.yml       daily cron — built
-  ci.yml            Slim CI — written, never yet run on GitHub
+  ci.yml            Slim CI — deferral path proven on PR #1
 Makefile             every workflow: up/seed/build/reset. `make help` lists them
-docker-compose.yml   dev Postgres: `warehouse` + `airflow` databases
+docker-compose.yml   dev Postgres: `warehouse` + `airflow` + `metabase` databases; Airflow; Metabase
 init/                first-boot SQL for the dev container
 scripts/seed_dev.sh  reload dev warehouse from Neon; read-only against prod
+scripts/metabase_setup.py  the dashboard, as code; `make dashboard`
 dbt_project/         all 13 models built and tested
   profiles.yml       in-repo, not ~/.dbt; targets dev / prod / ci
   macros/            parse_semver.sql, materiality.sql (ranking weights)
@@ -281,6 +284,6 @@ DESIGN.md            source of truth
 
 ## Definition of done
 
-See `DESIGN.md` §11 — it is now a live checklist with 6 of 11 ticked. The
-remaining five: three committed digests (needs time), Slim CI on a real PR,
-two Airflow screenshots, and the dashboard.
+See `DESIGN.md` §11 — it is now a live checklist with 8 of 11 ticked. The
+remaining three: three committed digests (needs time) and two Airflow
+screenshots.

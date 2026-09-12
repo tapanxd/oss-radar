@@ -14,9 +14,10 @@
 # Postgres already holding 5432, or a second project, does not collide. Set it
 # in .env and docker-compose, profiles.yml and the Makefile all follow.
 #
-# TWO DATABASES IN ONE CONTAINER, DELIBERATELY:
+# THREE DATABASES IN ONE CONTAINER, DELIBERATELY:
 #   warehouse  -> dbt builds here (dev target). Seeded from a Neon dump.
 #   airflow    -> Airflow's metadata DB. Created by init/01-airflow-db.sql.
+#   metabase   -> Metabase's app DB (questions, dashboards). init/03-metabase-db.sql.
 #
 # These are never the same database. Pointing dbt at Airflow's metadata DB is a
 # real mistake people make and is miserable to debug. See DESIGN.md section 3.
@@ -35,6 +36,10 @@
 #
 # No Celery worker, no Redis, no Flower, no triggerer: LocalExecutor needs
 # none of them, and nothing here uses deferrable operators.
+#
+# METABASE is under the `dashboard` profile for the same reason. It reads the
+# dev warehouse's marts; `make dashboard` builds the questions and dashboard
+# through its API so nothing has to be clicked together by hand.
 
 x-airflow-common: &airflow-common
   build:
@@ -166,6 +171,42 @@ services:
     depends_on:
       airflow-init:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # Metabase
+  # ---------------------------------------------------------------------
+
+  metabase:
+    # Pinned to the 0.63 line the way postgres is pinned to 18: patch
+    # releases come through, a new minor is a deliberate bump.
+    image: metabase/metabase:v0.63.x
+    container_name: radar-metabase
+    profiles: [dashboard]
+    environment:
+      # App DB in the `metabase` database, NOT `warehouse`. The warehouse is
+      # connected from inside Metabase as a data source (scripts/metabase_setup.py).
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: postgres
+      MB_DB_PORT: "5432"
+      MB_DB_DBNAME: metabase
+      MB_DB_USER: radar
+      MB_DB_PASS: radar
+      MB_SITE_NAME: oss-radar
+      MB_ANON_TRACKING_ENABLED: "false"
+      # Local dev only: the JVM defaults to a quarter of the host's RAM.
+      JAVA_OPTS: -Xmx1g
+    ports:
+      - "${RADAR_METABASE_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

@@ -105,7 +105,7 @@ tracking began. Reporting them as news would be a lie. They are surfaced in
                                             │
                             ┌───────────────┴───────────────┐
                             ▼                               ▼
-                   digests/YYYY-WW.md               dashboard
+                   digests/YYYY-WW.md           Metabase dashboard
                    (Phase 2)                        (Phase 3)
 ```
 
@@ -193,6 +193,9 @@ make digest                 # render digests/YYYY-WNN.md
 
 make airflow-build          # once: build the Airflow image with dbt baked in
 make airflow-up             # Airflow UI at http://localhost:8081
+
+make metabase-up            # Metabase at http://localhost:3000
+make dashboard              # build the dashboard from scripts/metabase_setup.py
 ```
 
 `make help` lists everything. `make reset` rebuilds the whole dev environment
@@ -213,6 +216,28 @@ Neon connection details from environment variables.
 ### Adding a repository
 
 Edit `collector/repos.yml`. Nothing else.
+
+### The dashboard
+
+Metabase, reading the marts. Nothing in it is clicked together by hand:
+`make dashboard` runs [`scripts/metabase_setup.py`](scripts/metabase_setup.py),
+which does first-run setup, connects the warehouse filtered to the marts
+schema, and creates or updates fourteen native-SQL questions and the dashboard
+that lays them out. Re-running it after a query change updates the existing
+questions in place, so the dashboard URL survives.
+
+Three sections, matching the three views the design asked for:
+
+- **Category pulse over time** — material events and stars gained per ISO
+  week, stacked by category (`agg_category_pulse`), plus a collection-health
+  line that should stay at zero.
+- **Change feed** — `fct_change_events` newest first, with the `evidence`
+  JSON in the row, and the change-type mix by materiality.
+- **Repo timeline** — `agg_repo_timeline`, one row per repo per month, and
+  the top repos by stars gained this month.
+
+The SQL is in the script rather than in Metabase's query builder so it is
+reviewable in a diff and identical to what a reader would run by hand.
 
 ---
 
@@ -266,8 +291,11 @@ excluded, degrading to `release_unclassified` rather than being dropped.
 
 Pull requests run `dbt build --select state:modified+ --defer --state`, which
 builds only what changed plus its descendants and points everything else at
-production. Verified rather than assumed: editing one model selects **7 of 13**
-and defers the other 6.
+production. Proven on the first pull request rather than assumed:
+[#1](https://github.com/tapanxd/oss-radar/pull/1) changed one intermediate
+model, CI found the manifest from the previous `main` build, built **7 of 13**
+models into a per-PR schema on Neon, deferred the other 6, skipped the
+full-build fallback, and dropped the schema afterwards.
 
 `--defer` rewrites unchanged `ref()`s to production relations, so those relations
 must exist. CI therefore runs against the same Neon database as production, in a
@@ -367,14 +395,14 @@ produces fewer digest lines than its actual activity warrants.
 | Phase | State |
 |---|---|
 | **0 — Collector** | Running daily since 2026-09-09 |
-| **1 — Warehouse** | Complete. 13 models, 172 dbt tests, 13 pytest, Slim CI green |
+| **1 — Warehouse** | Complete. 13 models, 174 dbt tests, 13 pytest, Slim CI deferral proven on PR #1 |
 | **2 — Airflow** | Running locally. Three DAGs; Asset-triggered digest; collector as 49 mapped tasks |
-| **3 — Polish** | README done. Dashboard and DAG screenshots outstanding |
+| **3 — Polish** | README and Metabase dashboard done. Airflow screenshots outstanding |
 
 The first digest is committed: [`digests/2026-W37.md`](digests/2026-W37.md),
 rendered from three days of collection and still marked partial until the
-week closes. Slim CI's deferral path has not yet run on an actual pull
-request; only the full-build fallback and the production build have executed.
+week closes. Slim CI's deferral path has run on a real pull request (#1)
+and did what it was designed to do.
 
 ---
 
