@@ -58,6 +58,14 @@ models:
           release look like a major bump, so semver parts are nulled and the
           release falls through to release_unclassified.
         data_tests: [not_null]
+      - name: tag_prefix
+        description: >
+          The tag with its version core removed: the component or package
+          name a monorepo puts in front (`desktop-`, `@arizeai/phoenix-evals@`),
+          or empty for a plain `v1.2.3`. When it differs from the previous
+          tag's prefix the two versions belong to different components and
+          the bump is not classified.
+        data_tests: [not_null]
       - name: prerelease_label
         description: >
           Semver prerelease suffix such as rc.1, or NULL. Only a hyphen suffix
@@ -160,3 +168,29 @@ unit_tests:
     expect:
       rows:
         - {github_repo_id: 5, after_value: "v1.0.1", change_type: "breaking_release", base_materiality: "high", has_breaking_markers: true, matched_marker_ids: "no_longer_supported"}
+
+  - name: monorepo_component_flip_is_not_a_bump
+    model: int_release_events
+    description: >
+      Arize-ai/phoenix on 2026-09-11, verbatim: GitHub's "latest release"
+      moved from the evals package to the main package, and the numbers
+      2.5.0 -> 20.10.0 were read as a major bump. Two tags with different
+      prefixes are two components; the numbers are unrelated and the event
+      degrades to release_unclassified. A same-prefix bump on the same repo
+      must still classify normally, and dropping the v must not count as a
+      prefix change.
+    given:
+      - input: ref('stg_repo_observations')
+        rows:
+          - {github_repo_id: 6, observed_date: "2026-01-01", repo_full_name: "Arize-ai/phoenix", category: "c", priority: "normal", latest_release_tag: "@arizeai/phoenix-evals@2.5.0", latest_release_body: ""}
+          - {github_repo_id: 6, observed_date: "2026-01-02", repo_full_name: "Arize-ai/phoenix", category: "c", priority: "normal", latest_release_tag: "arize-phoenix-v20.10.0", latest_release_body: ""}
+          - {github_repo_id: 6, observed_date: "2026-01-03", repo_full_name: "Arize-ai/phoenix", category: "c", priority: "normal", latest_release_tag: "arize-phoenix-v20.11.0", latest_release_body: ""}
+          - {github_repo_id: 7, observed_date: "2026-01-01", repo_full_name: "o/r7", category: "c", priority: "normal", latest_release_tag: "v1.2.3", latest_release_body: ""}
+          - {github_repo_id: 7, observed_date: "2026-01-02", repo_full_name: "o/r7", category: "c", priority: "normal", latest_release_tag: "1.2.4", latest_release_body: ""}
+      - input: ref('breaking_change_markers')
+        rows: []
+    expect:
+      rows:
+        - {github_repo_id: 6, after_value: "arize-phoenix-v20.10.0", change_type: "release_unclassified", tag_prefix: "arize-phoenix-", base_materiality: "medium"}
+        - {github_repo_id: 6, after_value: "arize-phoenix-v20.11.0", change_type: "minor_release", tag_prefix: "arize-phoenix-", base_materiality: "medium"}
+        - {github_repo_id: 7, after_value: "1.2.4", change_type: "patch_release", tag_prefix: "", base_materiality: "low"}

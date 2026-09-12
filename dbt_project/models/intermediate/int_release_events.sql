@@ -70,6 +70,9 @@ parsed as (
         {{ semver_part('previous_tag', 2) }}       as previous_minor,
         {{ semver_part('previous_tag', 3) }}       as previous_patch,
 
+        {{ semver_prefix('latest_release_tag') }}  as tag_prefix,
+        {{ semver_prefix('previous_tag') }}        as previous_tag_prefix,
+
         {{ is_calver('latest_release_tag') }}      as is_calver_tag,
         {{ semver_prerelease('latest_release_tag') }} as prerelease_label
 
@@ -134,15 +137,20 @@ classified as (
             when b.markers_matched is not null then 'breaking_release'
             when p.major is null then 'release_unclassified'
             when p.previous_major is null then 'release_unclassified'
+            -- Different prefix, different component. A monorepo's "latest"
+            -- flipping from `phoenix-evals@2.5.0` to `phoenix-v20.10.0` is
+            -- not a major bump, whichever direction the numbers moved.
+            -- Plain <> is safe: both tags parsed (checked above), so neither
+            -- prefix is NULL.
+            when p.tag_prefix <> p.previous_tag_prefix then 'release_unclassified'
             when p.major > p.previous_major then 'major_release'
             when p.major = p.previous_major
              and p.minor > p.previous_minor then 'minor_release'
             when p.major = p.previous_major
              and p.minor = p.previous_minor
              and p.patch > p.previous_patch then 'patch_release'
-            -- A version that went backwards is not a bump. It usually means
-            -- the repo publishes releases for several components under one
-            -- tag namespace, so the "latest" flips between them.
+            -- A version that went backwards under the SAME prefix is not a
+            -- bump either: a re-tag, a hotfix on an older line, or a rollback.
             else 'release_unclassified'
         end                            as change_type
 
@@ -185,6 +193,7 @@ final as (
         coalesce(latest_release_is_prerelease, false) as is_github_prerelease,
         prerelease_label,
         is_calver_tag,
+        tag_prefix,
 
         major, minor, patch,
         previous_major, previous_minor, previous_patch,
